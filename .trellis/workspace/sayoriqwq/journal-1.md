@@ -238,3 +238,36 @@ Migrated Effect reference workflow to a single repos/effect subtree from Effect-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Codify Effect context bootstrap
+
+**Date**: 2026-05-14
+**Task**: Codify Effect context bootstrap
+**Branch**: `codex/align-effect-v4-beta`
+
+### Summary
+
+Captured bare-agent Effect context discovery rules in AGENTS and TypeScript Effect specs, then verified a no-history explorer can locate the Effect pattern docs, repos/effect subtree, v4 beta baseline, import boundary, and validation commands.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5f20ced6c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

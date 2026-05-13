@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-05-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~240 | Active |
+| `journal-1.md` | ~273 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-05-14 | Codify Effect context bootstrap | `5f20ced6c` | `codex/align-effect-v4-beta` |
 | 7 | 2026-05-14 | Align Effect v4 beta reference | `eb3a224f9`, `f256ab8a7`, `f7985a8a1`, `2d70ee241` | `codex/align-effect-v4-beta` |
 | 6 | 2026-05-13 | Effect reference patterns | `ef86feb` | `main` |
 | 5 | 2026-05-13 | Implement Effect-first test infrastructure | `d379a70` | `main` |
