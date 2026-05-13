@@ -3,7 +3,7 @@
     "target": "ES2023",
     "lib": ["ES2023"],
     "moduleDetection": "force",
-    "rootDir": "src",
+    "rootDir": ".",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "plugins": [
