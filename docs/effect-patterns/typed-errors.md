@@ -75,5 +75,5 @@ workspaces, or timeouts.
 - Official docs: <https://effect.website/docs/error-management/expected-errors/>
 - Official docs: <https://effect.website/docs/error-management/two-error-types/>
 - Official docs: <https://effect.website/docs/data-types/data/>
-- Pinned source: `reference/effect/source/packages/effect/test/Effect/error.test.ts`
-- Pinned source: `reference/effect/source/packages/cli/examples/naval-fate/domain.ts`
+- Pinned source: `repos/effect/packages/effect/test/Cause.test.ts`
+- Pinned source: `repos/effect/packages/effect/test/unstable/cli/fixtures/ComprehensiveCli.ts`

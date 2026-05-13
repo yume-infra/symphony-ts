@@ -49,22 +49,31 @@ These notes are the temporary project authority until `.trellis/spec/` is rewrit
 
 - Use Effect as the main application runtime foundation for configuration, services, concurrency,
   resource lifecycle, error handling, and integration boundaries.
+- The active Effect dependency baseline is Effect v4 beta. Treat `effect@4.0.0-beta.66` and
+  matching v4 beta packages as the implementation API unless package metadata or `pnpm-lock.yaml`
+  proves otherwise.
 - Use the experimental `@effect/tsgo` toolchain directly for Effect language-service diagnostics.
   This project intentionally chooses the aggressive path here: prefer the testing-stage tsgo-based
   Effect LSP experience over the conservative standalone `@effect/language-service` setup.
 - Follow Effect's official LLM coding baseline: use `llms.txt` / `llms-full.txt` and topic docs as
   navigation, but prefer a tight feedback loop with tsgo diagnostics plus local source/reference
   material over guessing APIs from memory.
-- Effect best-practice source order is: current package versions in `package.json`, relevant Effect
-  official docs, local vendored/reference Effect source when available, tsgo diagnostics, then
+- Effect best-practice source order is: current package versions in `package.json` and
+  `pnpm-lock.yaml`, relevant Effect official docs, local vendored/reference Effect source under
+  `repos/effect`, tsgo diagnostics, then
   project-local Trellis specs and AGENTS decisions.
 - `effect.website/docs/code-style/guidelines/` is the minimum style floor: run long-lived Node
   programs with `NodeRuntime.runMain` and avoid tacit / point-free Effect calls when explicit
   callbacks preserve inference and stack clarity.
-- When Effect source is vendored later, treat it as read-only reference material. Do not import from
-  vendored source; application code must import from normal package dependencies.
-- Keep `@effect/cli` as the CLI layer. Do not introduce another CLI framework such as Commander,
-  Yargs, oclif, cac, or interactive prompt tooling unless the user explicitly approves it.
+- `repos/effect` is a squashed, read-only subtree of the official Effect v4 beta source repository
+  `Effect-TS/effect-smol`. Use it for source, tests, examples, and API design reference only. Do
+  not edit vendored files unless explicitly asked, and never import from `repos/effect` in
+  application or test code.
+- Use the Effect v4 beta CLI module at `effect/unstable/cli` as the CLI layer. Do not keep the
+  legacy `@effect/cli` package in application dependencies while migrating to v4 beta because its
+  latest published package peers on Effect v3. Do not introduce another CLI framework such as
+  Commander, Yargs, oclif, cac, or interactive prompt tooling unless the user explicitly approves
+  it.
 - Do not expand the CLI into subcommands, dashboards, setup wizards, or broad operator UX unless the
   user asks for that scope.
 - Core implementation work should focus on the Symphony runtime: workflow loading, typed config,

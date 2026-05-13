@@ -77,5 +77,5 @@ interrupt can stop the loop without leaking external work.
 - Official docs: <https://effect.website/docs/concurrency/fibers/>
 - Official docs: <https://effect.website/docs/concurrency/basic-concurrency/>
 - Official docs: <https://effect.website/docs/error-management/timing-out/>
-- Pinned source: `reference/effect/source/packages/effect/test/Effect/interruption.test.ts`
-- Pinned source: `reference/effect/source/packages/effect/src/Fiber.ts`
+- Pinned source: `repos/effect/packages/effect/test/Fiber.test.ts`
+- Pinned source: `repos/effect/packages/effect/src/Fiber.ts`

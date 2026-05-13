@@ -85,5 +85,5 @@ Detached fibers are only acceptable when the caller receives and owns the
 
 - Official docs: <https://effect.website/docs/resource-management/introduction/>
 - Official docs: <https://effect.website/docs/resource-management/scope/>
-- Pinned source: `reference/effect/source/packages/effect/src/Effect.ts`
-- Pinned source: `reference/effect/source/packages/platform-node-shared/src/NodeSocketServer.ts`
+- Pinned source: `repos/effect/packages/effect/src/Effect.ts`
+- Pinned source: `repos/effect/packages/platform-node-shared/src/NodeSocketServer.ts`

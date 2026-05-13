@@ -81,7 +81,7 @@ For runtime work, include the relevant `SPEC.md` sections and the specific confo
 - When protocol shape matters, inspect current docs or generated schema instead of relying on stale
   examples.
 - When Effect APIs are uncertain, use package versions, project-local pattern docs, official Effect
-  docs, the pinned source under `reference/effect/`, and `@effect/tsgo` diagnostics.
+  docs, the vendored source under `repos/effect/`, and `@effect/tsgo` diagnostics.
 
 ## Validation
 

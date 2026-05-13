@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 
-import process from 'node:process'
-import { Command, Options } from '@effect/cli'
-import { NodeContext, NodeRuntime } from '@effect/platform-node'
-import { Console, Effect } from 'effect'
+import * as NodeRuntime from '@effect/platform-node/NodeRuntime'
+import * as NodeServices from '@effect/platform-node/NodeServices'
+import * as Console from 'effect/Console'
+import * as Effect from 'effect/Effect'
+import * as Command from 'effect/unstable/cli/Command'
+import * as Flag from 'effect/unstable/cli/Flag'
 import { renderGreeting } from './greeting.js'
 
 export { renderGreeting } from './greeting.js'
 
-const name = Options.text('name').pipe(
-  Options.withDefault('world'),
-  Options.withDescription('Name to greet'),
+const name = Flag.string('name').pipe(
+  Flag.withDefault('world'),
+  Flag.withDescription('Name to greet'),
 )
 
 const command = Command.make(
@@ -19,11 +21,10 @@ const command = Command.make(
   ({ name }) => Console.log(renderGreeting(name)),
 )
 
-const cli = Command.run(command, {
-  name: 'symphony-ts',
+const main = Command.run(command, {
   version: '0.0.0',
-})
-
-NodeRuntime.runMain(
-  cli(process.argv).pipe(Effect.provide(NodeContext.layer)),
+}).pipe(
+  Effect.provide(NodeServices.layer),
 )
+
+NodeRuntime.runMain(main)

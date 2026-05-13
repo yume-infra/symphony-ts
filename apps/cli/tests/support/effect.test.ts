@@ -2,10 +2,10 @@ import { Context, Data, Effect, Layer } from 'effect'
 import { describe, expect, it } from 'vitest'
 import { EffectTestError, runEffect } from './effect.js'
 
-class TestService extends Context.Tag('TestService')<
+class TestService extends Context.Service<
   TestService,
   { readonly value: string }
->() {}
+>()('TestService') {}
 
 class ExpectedTestFailure extends Data.TaggedError('ExpectedTestFailure')<{
   readonly message: string
@@ -25,7 +25,7 @@ describe('runEffect', () => {
 
     await expect(
       runEffect(program, {
-        layer: Layer.succeed(TestService, { value: 'provided' }),
+        layer: Layer.succeed(TestService)({ value: 'provided' }),
       }),
     ).resolves.toBe('provided')
   })

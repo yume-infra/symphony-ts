@@ -11,16 +11,18 @@ in the `Effect` requirements channel and avoids passing large context objects
 through unrelated call chains.
 
 ```ts
-import { Context, Effect, Layer } from "effect"
+import * as Context from "effect/Context"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 
-export class WorkflowLoader extends Context.Tag("symphony/WorkflowLoader")<
+export class WorkflowLoader extends Context.Service<
   WorkflowLoader,
   {
     readonly load: (
       path: string,
     ) => Effect.Effect<WorkflowDefinition, WorkflowLoadError>
   }
->() {}
+>()("symphony/WorkflowLoader") {}
 
 export const WorkflowLoaderLive = Layer.effect(
   WorkflowLoader,
@@ -61,24 +63,24 @@ export const loadInitialWorkflow = (path: string) =>
   finalizer.
 - Use `Layer.succeed` for pure implementations and fakes.
 
-## `Effect.Service`
+## Service Helpers
 
-The pinned Effect source includes `Effect.Service` as an experimental helper
-that builds a tag and layer together. Its source docs mark it experimental. Use
-plain `Context.Tag` plus `Layer` as the project default until a specific module
-benefits enough from generated accessors or default dependency wiring to justify
-`Effect.Service`.
+The active Effect v4 beta source uses `Context.Service` for service keys. Use
+plain `Context.Service` plus `Layer` as the project default until a specific
+module benefits enough from generated accessors or default dependency wiring to
+justify a higher-level helper.
 
-If `Effect.Service` is used, verify it with `rtk pnpm typecheck` and keep the
-service declaration local and boring:
+If a higher-level helper is used, verify it with `rtk pnpm typecheck` and keep
+the service declaration local and boring:
 
 ```ts
-class Logger extends Effect.Service<Logger>()("symphony/Logger", {
-  accessors: true,
-  sync: () => ({
+class Logger extends Context.Service<Logger, {
+  readonly info: (message: string) => Effect.Effect<void>
+}>()("symphony/Logger") {}
+
+const LoggerLive = Layer.succeed(Logger)({
     info: (message: string) => Effect.logInfo(message),
-  }),
-}) {}
+})
 ```
 
 ## Testing
@@ -87,7 +89,7 @@ Fakes should be layers that satisfy the same service tag:
 
 ```ts
 export const WorkflowLoaderTest = (definition: WorkflowDefinition) =>
-  Layer.succeed(WorkflowLoader, {
+  Layer.succeed(WorkflowLoader)({
     load: () => Effect.succeed(definition),
   })
 ```
@@ -99,6 +101,6 @@ that owns the dependency.
 
 - Official docs: <https://effect.website/docs/requirements-management/services/>
 - Official docs: <https://effect.website/docs/requirements-management/layers/>
-- Pinned source: `reference/effect/source/packages/effect/src/Context.ts`
-- Pinned source: `reference/effect/source/packages/effect/src/Layer.ts`
-- Pinned source: `reference/effect/source/packages/effect/test/Effect/service.test.ts`
+- Pinned source: `repos/effect/packages/effect/src/Context.ts`
+- Pinned source: `repos/effect/packages/effect/src/Layer.ts`
+- Pinned source: `repos/effect/packages/effect/test/Layer.test.ts`

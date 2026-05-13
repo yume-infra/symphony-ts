@@ -4,15 +4,15 @@ These docs are the first Effect reference for Symphony runtime implementation.
 Read the relevant page before writing services, resources, workers, schedules,
 state handling, errors, or CLI entrypoint code.
 
-The pinned upstream source is available locally at `reference/effect/source/`.
-If it is missing, recreate it from [reference/effect/README.md](../../reference/effect/README.md).
+The upstream Effect v4 beta source is vendored locally at `repos/effect/`.
+It is a squashed subtree from `Effect-TS/effect-smol`, the repository published
+in the `effect@4.0.0-beta.66` package metadata. The selected upstream commit is
+`b559d68845f848a10153395778f035682d399075`.
 
 ## Version Baseline
 
-- `effect@3.21.2`
-- `@effect/platform@0.96.1`
-- `@effect/platform-node@0.106.0`
-- `@effect/cli@0.75.1`
+- `effect@4.0.0-beta.66`
+- `@effect/platform-node@4.0.0-beta.66`
 - `@effect/tsgo@0.7.0`
 - `@typescript/native-preview@7.0.0-dev.20260513.1`
 
@@ -43,7 +43,7 @@ For non-trivial Effect code, use this order:
    - <https://effect.website/docs/state-management/ref/>
    - <https://effect.website/docs/data-types/data/>
    - <https://effect.website/docs/code-style/guidelines/>
-4. Pinned upstream source under `reference/effect/source/`.
+4. Vendored upstream source under `repos/effect/`.
 5. `rtk pnpm typecheck` diagnostics from `@effect/tsgo`.
 
 Do not guess Effect APIs from memory when `tsgo` or the pinned source can
@@ -54,9 +54,10 @@ answer the question.
 Application code imports from installed dependencies only:
 
 ```ts
-import { Effect, Layer } from "effect"
-import { NodeRuntime } from "@effect/platform-node"
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 ```
 
-Imports from `reference/effect/source/` are forbidden. The reference checkout is
-read-only source material, not an application dependency.
+Imports from `repos/effect/` are forbidden. The subtree is read-only source
+material, not an application dependency.

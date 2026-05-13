@@ -11,48 +11,47 @@ with meaningful status. Runtime behavior belongs in services and layers.
 
 ## Entrypoint Pattern
 
-Use `@effect/cli` and `NodeRuntime.runMain`:
+Use the Effect v4 beta CLI module and `NodeRuntime.runMain`:
 
 ```ts
 #!/usr/bin/env node
 
-import process from "node:process"
-import { Args, Command } from "@effect/cli"
-import { NodeContext, NodeRuntime } from "@effect/platform-node"
-import { Effect } from "effect"
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
+import * as Argument from "effect/unstable/cli/Argument"
+import * as Command from "effect/unstable/cli/Command"
 
-const workflowPath = Args.file({ name: "workflow-path" }).pipe(
-  Args.optional,
-)
+const workflowPath = Argument.path("workflow-path").pipe(Argument.optional)
 
 const command = Command.make(
   "symphony-ts",
   { workflowPath },
   ({ workflowPath }) =>
-    startSymphony(workflowPath).pipe(
+    startSymphony(Option.getOrUndefined(workflowPath)).pipe(
       Effect.provide(AppLive),
     ),
 )
 
-const cli = Command.run(command, {
-  name: "symphony-ts",
+const main = Command.run(command, {
   version: "0.0.0",
-})
-
-NodeRuntime.runMain(
-  cli(process.argv).pipe(Effect.provide(NodeContext.layer)),
+}).pipe(
+  Effect.provide(NodeServices.layer),
 )
+
+NodeRuntime.runMain(main)
 ```
 
-Use the exact `@effect/cli` API confirmed by `tsgo` for optional path parsing.
-The example shows the shape, not a runtime implementation.
+Use the exact `effect/unstable/cli` API confirmed by `tsgo` for optional path
+parsing. The example shows the shape, not a runtime implementation.
 
 ## CLI Boundary Rules
 
 - Do not add subcommands unless the task explicitly expands the CLI surface.
 - Do not start Linear, workspace, or Codex logic directly in command handlers.
 - Do not introduce another CLI framework.
-- Provide `NodeContext.layer` at the Node boundary.
+- Provide `NodeServices.layer` at the Node boundary.
 - Use `NodeRuntime.runMain`, not `Effect.runPromise`, for the long-running
   service.
 - Keep shutdown behavior in scopes and finalizers owned by runtime layers.
@@ -70,6 +69,8 @@ rtk pnpm verify
 
 - Official docs: <https://effect.website/docs/platform/runtime/>
 - Official docs: <https://effect.website/docs/code-style/guidelines/>
-- Pinned source: `reference/effect/source/packages/cli/examples/minigit.ts`
-- Pinned source: `reference/effect/source/packages/platform-node/src/NodeRuntime.ts`
+- Pinned source: `repos/effect/packages/effect/src/unstable/cli/Command.ts`
+- Pinned source: `repos/effect/packages/effect/typetest/unstable/cli/Command.tst.ts`
+- Pinned source: `repos/effect/packages/platform-node/src/NodeRuntime.ts`
+- Pinned source: `repos/effect/packages/platform-node/src/NodeServices.ts`
 - Local entrypoint: `apps/cli/src/index.ts`

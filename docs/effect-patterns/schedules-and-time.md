@@ -72,5 +72,5 @@ test clock helpers instead of sleeping real time.
 - Official docs: <https://effect.website/docs/scheduling/built-in-schedules/>
 - Official docs: <https://effect.website/docs/error-management/retrying/>
 - Official docs: <https://effect.website/docs/error-management/timing-out/>
-- Pinned source: `reference/effect/source/packages/effect/src/Schedule.ts`
-- Pinned source: `reference/effect/source/packages/effect/test/Effect/retrying.test.ts`
+- Pinned source: `repos/effect/packages/effect/src/Schedule.ts`
+- Pinned source: `repos/effect/packages/effect/test/Effect.test.ts`

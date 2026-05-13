@@ -80,6 +80,6 @@ needed.
 - Official docs: <https://effect.website/docs/state-management/ref/>
 - Official docs: <https://effect.website/docs/state-management/synchronizedref/>
 - Official docs: <https://effect.website/docs/concurrency/queue/>
-- Pinned source: `reference/effect/source/packages/effect/src/Ref.ts`
-- Pinned source: `reference/effect/source/packages/effect/src/SynchronizedRef.ts`
-- Pinned source: `reference/effect/source/packages/effect/src/Queue.ts`
+- Pinned source: `repos/effect/packages/effect/src/Ref.ts`
+- Pinned source: `repos/effect/packages/effect/src/SynchronizedRef.ts`
+- Pinned source: `repos/effect/packages/effect/src/Queue.ts`

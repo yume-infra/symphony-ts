@@ -31,17 +31,20 @@ pnpm --filter symphony-ts test
 pnpm --filter symphony-ts smoke:bin
 ```
 
-The CLI entrypoint uses `@effect/cli`, `NodeContext.layer`, and `NodeRuntime.runMain`. The broad
-Symphony runtime is intentionally not implemented yet.
+The CLI entrypoint uses the Effect v4 beta CLI module at `effect/unstable/cli`,
+`NodeServices.layer`, and `NodeRuntime.runMain`. The broad Symphony runtime is
+intentionally not implemented yet.
 
 ## Effect Reference
 
 Effect runtime work should start with the local pattern docs in
-`docs/effect-patterns/`. The pinned upstream Effect source reference is recorded
-in `reference/effect/` and can be recreated locally at `reference/effect/source/`.
+`docs/effect-patterns/`. The upstream Effect v4 beta source reference is
+vendored as a squashed subtree at `repos/effect`, from the official
+`Effect-TS/effect-smol` repository. The selected upstream commit is
+`b559d68845f848a10153395778f035682d399075`.
 
 Application code must import Effect APIs from package dependencies, never from
-the reference checkout.
+the reference subtree.
 
 ## Symphony
 

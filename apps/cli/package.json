@@ -31,11 +31,7 @@
     "typecheck:tsc": "tsc --noEmit"
   },
   "dependencies": {
-    "@effect/cli": "catalog:",
-    "@effect/platform": "catalog:",
     "@effect/platform-node": "catalog:",
-    "@effect/printer": "catalog:",
-    "@effect/printer-ansi": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

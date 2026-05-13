@@ -3,6 +3,15 @@
   "prettier.enable": false,
   "editor.formatOnSave": false,
   "typescript.native-preview.tsdk": "node_modules/@typescript/native-preview",
+  "typescript.preferences.autoImportFileExcludePatterns": [
+    "**/repos/**"
+  ],
+  "files.watcherExclude": {
+    "**/repos/**": true
+  },
+  "search.exclude": {
+    "**/repos/**": true
+  },
 
   // Auto fix
   "editor.codeActionsOnSave": {

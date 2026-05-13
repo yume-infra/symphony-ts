@@ -23,6 +23,10 @@ effect-tsgo patch
 ```
 
 This patches native-preview with the Effect-enhanced binary.
+`effect-tsgo` itself is a setup/patch wrapper in the installed `@effect/tsgo`
+version; it does not accept `--noEmit`. Keep package scripts on the patched
+`tsgo --noEmit` command unless a future `@effect/tsgo` release changes that CLI
+surface.
 
 ## Policy
 
@@ -38,7 +42,7 @@ This patches native-preview with the Effect-enhanced binary.
 ## Agent Loop
 
 1. Read the relevant pattern doc.
-2. Check source examples under `reference/effect/source/` only when needed.
+2. Check source examples under `repos/effect/` only when needed.
 3. Implement the narrow runtime slice.
 4. Run `rtk pnpm typecheck`.
 5. Use diagnostics to fix Effect API and floating Effect issues.
