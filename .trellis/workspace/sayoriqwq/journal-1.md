@@ -169,3 +169,36 @@ Implemented shared Effect Vitest helper with readable Cause failures, added narr
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Effect reference patterns
+
+**Date**: 2026-05-13
+**Task**: Effect reference patterns
+**Branch**: `main`
+
+### Summary
+
+Pinned the upstream Effect reference checkout, added project-local Effect pattern docs, validated the task, and archived it.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ef86feb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
