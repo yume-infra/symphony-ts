@@ -30,7 +30,7 @@ These guides help you **ask the right questions before coding**.
 
 ### When to Think About Cross-Layer Issues
 
-- [ ] Feature touches 3+ layers (API, Service, Component, Database)
+- [ ] Feature touches 3+ runtime or integration layers
 - [ ] Data format changes between layers
 - [ ] Multiple consumers need the same data
 - [ ] You're not sure where to put some logic
@@ -55,7 +55,7 @@ These guides help you **ask the right questions before coding**.
 
 ```bash
 # Search for the value you're about to change
-grep -r "value_to_change" .
+rg "value_to_change"
 ```
 
 This single habit prevents most "forgot to update X" bugs.

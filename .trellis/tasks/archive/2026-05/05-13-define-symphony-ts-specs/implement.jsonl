@@ -1,0 +1,8 @@
+{"file": "AGENTS.md", "reason": "Project-wide agent instructions"}
+{"file": "SPEC.md", "reason": "Symphony reference specification"}
+{"file": ".trellis/spec/symphony/index.md", "reason": "Product and conformance guidelines"}
+{"file": ".trellis/spec/runtime-orchestration/index.md", "reason": "Runtime orchestration guidelines"}
+{"file": ".trellis/spec/external-integrations/index.md", "reason": "External integration guidelines"}
+{"file": ".trellis/spec/typescript-effect/index.md", "reason": "TypeScript and Effect guidelines"}
+{"file": ".trellis/spec/testing-conformance/index.md", "reason": "Testing and conformance guidelines"}
+{"file": ".trellis/spec/quality-operations/index.md", "reason": "Quality operations and goal context guidelines"}

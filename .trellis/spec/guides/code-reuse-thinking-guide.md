@@ -46,11 +46,11 @@ grep -r "keyword" .
 
 **Good**: Extract to shared utilities, import where needed
 
-### Pattern 2: Similar Components
+### Pattern 2: Similar Services Or Modules
 
-**Bad**: Creating a new component that's 80% similar to existing
+**Bad**: Creating a new service/module that's 80% similar to existing
 
-**Good**: Extend existing component with props/variants
+**Good**: Extend the existing service/module contract or extract a shared helper
 
 ### Pattern 3: Repeated Constants
 
