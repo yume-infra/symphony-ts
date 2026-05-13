@@ -72,3 +72,36 @@ Planned strict first-pass SPEC.md conformance, deferred dashboard/HTTP/SSH scope
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Migrate Symphony-ts CLI to monorepo
+
+**Date**: 2026-05-13
+**Task**: Migrate Symphony-ts CLI to monorepo
+**Branch**: `main`
+
+### Summary
+
+Migrated the generated Symphony-ts CLI from a single-package layout into a create-yume-style pnpm monorepo with apps/cli, libs placeholder, Turbo orchestration, catalog-managed dependencies, Vitest baseline, workspace-aware Knip/lint config, README updates, and passing verify/smoke checks.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `711f406` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
