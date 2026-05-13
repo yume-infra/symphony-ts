@@ -136,3 +136,36 @@ Created and archived a planning task for the next test-infrastructure slice. The
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Implement Effect-first test infrastructure
+
+**Date**: 2026-05-13
+**Task**: Implement Effect-first test infrastructure
+**Branch**: `main`
+
+### Summary
+
+Implemented shared Effect Vitest helper with readable Cause failures, added narrow fixture/fake test-support boundaries, added CLI greeting and helper tests, removed passWithNoTests, and kept full verify plus smoke checks green.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d379a70` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
