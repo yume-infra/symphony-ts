@@ -2,28 +2,28 @@
 
 ## Reference
 
-- [ ] Current Effect-related package versions recorded.
-- [ ] Upstream Effect monorepo URL recorded.
-- [ ] Commit/tag selected.
-- [ ] Version alignment rationale recorded.
-- [ ] Reference path created.
-- [ ] Read-only rule documented.
-- [ ] Import-from-reference prohibition documented.
-- [ ] Update process documented.
+- [x] Current Effect-related package versions recorded.
+- [x] Upstream Effect monorepo URL recorded.
+- [x] Commit/tag selected.
+- [x] Version alignment rationale recorded.
+- [x] Reference path created.
+- [x] Read-only rule documented.
+- [x] Import-from-reference prohibition documented.
+- [x] Update process documented.
 
 ## Pattern Docs
 
-- [ ] Pattern index exists.
-- [ ] Services/layers docs exist.
-- [ ] Scoped resources/finalizers docs exist.
-- [ ] Fibers/interruption docs exist.
-- [ ] Schedules/retry/timeout docs exist.
-- [ ] State tools docs exist.
-- [ ] Typed errors docs exist.
-- [ ] CLI/NodeRuntime docs exist.
-- [ ] tsgo diagnostics docs exist.
+- [x] Pattern index exists.
+- [x] Services/layers docs exist.
+- [x] Scoped resources/finalizers docs exist.
+- [x] Fibers/interruption docs exist.
+- [x] Schedules/retry/timeout docs exist.
+- [x] State tools docs exist.
+- [x] Typed errors docs exist.
+- [x] CLI/NodeRuntime docs exist.
+- [x] tsgo diagnostics docs exist.
 
 ## Validation
 
-- [ ] `pnpm verify` passes.
-- [ ] No Symphony runtime behavior added.
+- [x] `pnpm verify` passes.
+- [x] No Symphony runtime behavior added.

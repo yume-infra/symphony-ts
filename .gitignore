@@ -13,6 +13,9 @@ dist
 dist-ssr
 *.local
 
+# Local read-only upstream source checkouts.
+reference/effect/source/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

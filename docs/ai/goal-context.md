@@ -18,6 +18,7 @@ Then load project-wide authority:
 - `AGENTS.md`
 - relevant sections of `SPEC.md`
 - `README.md` for current workspace shape and commands
+- `docs/effect-patterns/index.md` before Effect runtime implementation
 - relevant `.trellis/spec/*/index.md` files
 - detailed `.trellis/spec/*/*.md` files only for touched layers
 
@@ -80,7 +81,7 @@ For runtime work, include the relevant `SPEC.md` sections and the specific confo
 - When protocol shape matters, inspect current docs or generated schema instead of relying on stale
   examples.
 - When Effect APIs are uncertain, use package versions, project-local pattern docs, official Effect
-  docs, vendored source if present, and `@effect/tsgo` diagnostics.
+  docs, the pinned source under `reference/effect/`, and `@effect/tsgo` diagnostics.
 
 ## Validation
 

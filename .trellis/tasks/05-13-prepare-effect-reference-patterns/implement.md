@@ -8,16 +8,16 @@
 
 ## Ordered Execution After Approval
 
-1. [ ] Start the task with `task.py start`.
-2. [ ] Read current package/catalog versions.
-3. [ ] Research upstream Effect tags/commits aligned to current package versions.
-4. [ ] Choose reference path and pinning mechanism.
-5. [ ] Vendor/pin the full upstream Effect monorepo as read-only reference.
-6. [ ] Add reference metadata and update instructions.
-7. [ ] Create project-local Effect pattern docs.
-8. [ ] Cross-link docs from task checklist and, only if explicitly justified, Trellis specs.
-9. [ ] Run validation.
-10. [ ] Update checklist and finish the task.
+1. [x] Start the task with `task.py start`.
+2. [x] Read current package/catalog versions.
+3. [x] Research upstream Effect tags/commits aligned to current package versions.
+4. [x] Choose reference path and pinning mechanism.
+5. [x] Vendor/pin the full upstream Effect monorepo as read-only reference.
+6. [x] Add reference metadata and update instructions.
+7. [x] Create project-local Effect pattern docs.
+8. [x] Cross-link docs from task checklist and maintained docs; Trellis specs intentionally left unchanged.
+9. [x] Run validation.
+10. [x] Update checklist and finish the task.
 
 ## Validation Commands
 
