@@ -1,0 +1,290 @@
+import type { CodexAppServerClient } from '../agent-runner/codex.js'
+import type { CodexError, ConfigError, PromptRenderError, TrackerError, WorkspaceError } from '../domain/errors.js'
+import type { Issue, ServiceConfig } from '../domain/types.js'
+import type { PromptRenderer } from '../prompt/render.js'
+import type { LinearTransport } from '../tracker/linear.js'
+import type { RuntimeState, WorkerExitReason } from './state.js'
+import { Effect } from 'effect'
+import { AgentRunner } from '../agent-runner/runner.js'
+import { ConfigResolver } from '../config/resolve.js'
+import { normalizeStateName } from '../domain/types.js'
+import { TrackerClient } from '../tracker/linear.js'
+import { WorkspaceManager, workspacePathFor } from '../workspace/manager.js'
+import { failureRetryDelayMs, isDispatchEligible, OrchestratorState, removeRunningForReconciliation, sortCandidates } from './state.js'
+
+export interface PollTickOptions {
+  readonly nowMs: number
+  readonly launchMode?: 'inline' | 'fork'
+}
+
+export type PollTickError
+  = | ConfigError
+    | TrackerError
+    | WorkspaceError
+    | PromptRenderError
+    | CodexError
+
+export function pollTick(
+  config: ServiceConfig,
+  options: PollTickOptions,
+): Effect.Effect<
+  void,
+  PollTickError,
+  | ConfigResolver
+  | OrchestratorState
+  | TrackerClient
+  | AgentRunner
+  | WorkspaceManager
+  | PromptRenderer
+  | CodexAppServerClient
+  | LinearTransport
+> {
+  return Effect.gen(function* () {
+    const resolver = yield* ConfigResolver
+    const tracker = yield* TrackerClient
+    const state = yield* OrchestratorState
+
+    yield* reconcileRunning(config, options.nowMs)
+    yield* processDueRetries(config, options)
+    yield* resolver.validateDispatch(config)
+
+    const candidates = yield* tracker.fetchCandidateIssues(config)
+
+    for (const issue of sortCandidates(candidates)) {
+      const current = yield* state.get
+
+      if (!isDispatchEligible(issue, current, config)) {
+        continue
+      }
+
+      yield* dispatchIssue(issue, null, config, options)
+    }
+  })
+}
+
+export function reconcileRunning(
+  config: ServiceConfig,
+  nowMs: number,
+): Effect.Effect<void, TrackerError, OrchestratorState | TrackerClient | WorkspaceManager | LinearTransport> {
+  return Effect.gen(function* () {
+    const stateService = yield* OrchestratorState
+    const tracker = yield* TrackerClient
+    const workspace = yield* WorkspaceManager
+    const state = yield* stateService.get
+    let nextState = reconcileStalledRuns(state, config, nowMs)
+    const runningIds = [...nextState.running.keys()]
+
+    if (runningIds.length === 0) {
+      yield* stateService.set(nextState)
+      return
+    }
+
+    const refreshed = yield* tracker.fetchIssueStatesByIds(config, runningIds).pipe(
+      Effect.catch(() => Effect.succeed<ReadonlyArray<Issue>>([])),
+    )
+
+    if (refreshed.length === 0) {
+      yield* stateService.set(nextState)
+      return
+    }
+
+    for (const issue of refreshed) {
+      const running = nextState.running.get(issue.id)
+
+      if (running === undefined) {
+        continue
+      }
+
+      if (isTerminal(issue, config)) {
+        nextState = removeRunningForReconciliation(nextState, issue.id, true)
+        yield* workspace.removeForIssueBestEffort(issue.identifier, config.workspace, config.hooks)
+        continue
+      }
+
+      if (!isActive(issue, config)) {
+        nextState = removeRunningForReconciliation(nextState, issue.id, false)
+        continue
+      }
+
+      nextState = {
+        ...nextState,
+        running: new Map(nextState.running).set(issue.id, {
+          ...running,
+          issue,
+        }),
+      }
+    }
+
+    yield* stateService.set(nextState)
+  })
+}
+
+export function startupTerminalWorkspaceCleanup(
+  config: ServiceConfig,
+): Effect.Effect<void, never, TrackerClient | WorkspaceManager | LinearTransport> {
+  return Effect.gen(function* () {
+    const tracker = yield* TrackerClient
+    const workspace = yield* WorkspaceManager
+    const terminalIssues = yield* tracker.fetchIssuesByStates(config, config.tracker.terminalStates).pipe(
+      Effect.catch(() => Effect.succeed<ReadonlyArray<Issue>>([])),
+    )
+
+    for (const issue of terminalIssues) {
+      yield* workspace.removeForIssueBestEffort(issue.identifier, config.workspace, config.hooks)
+    }
+  })
+}
+
+export function reconcileStalledRuns(
+  state: RuntimeState,
+  config: ServiceConfig,
+  nowMs: number,
+): RuntimeState {
+  if (config.codex.stallTimeoutMs <= 0) {
+    return state
+  }
+
+  let nextState = state
+
+  for (const running of state.running.values()) {
+    const lastActivity = running.session?.lastCodexTimestamp ?? running.startedAtMs
+
+    if (nowMs - lastActivity > config.codex.stallTimeoutMs) {
+      nextState = removeRunningForReconciliation(nextState, running.issue.id, false)
+      nextState = {
+        ...nextState,
+        retryAttempts: new Map(nextState.retryAttempts).set(running.issue.id, {
+          issueId: running.issue.id,
+          identifier: running.issue.identifier,
+          attempt: (running.attempt ?? 0) + 1,
+          dueAtMs: nowMs + failureRetryDelayMs((running.attempt ?? 0) + 1, config),
+          error: 'worker stalled',
+        }),
+        claimed: new Set(nextState.claimed).add(running.issue.id),
+      }
+    }
+  }
+
+  return nextState
+}
+
+function processDueRetries(
+  config: ServiceConfig,
+  options: PollTickOptions,
+): Effect.Effect<
+  void,
+  PollTickError,
+  OrchestratorState | TrackerClient | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | LinearTransport
+> {
+  return Effect.gen(function* () {
+    const state = yield* OrchestratorState
+    const tracker = yield* TrackerClient
+    const snapshot = yield* state.get
+    const dueRetries = [...snapshot.retryAttempts.values()].filter(retry => retry.dueAtMs <= options.nowMs)
+
+    if (dueRetries.length === 0) {
+      return
+    }
+
+    const candidates = yield* tracker.fetchCandidateIssues(config)
+
+    for (const retry of dueRetries) {
+      const issue = candidates.find(candidate => candidate.id === retry.issueId)
+
+      if (issue === undefined) {
+        yield* state.releaseClaim(retry.issueId)
+        continue
+      }
+
+      const current = yield* state.get
+
+      if (!isDispatchEligible(issue, {
+        ...current,
+        claimed: new Set([...current.claimed].filter(id => id !== retry.issueId)),
+      }, config)) {
+        yield* state.scheduleRetry(
+          issue,
+          retry.attempt + 1,
+          'no available orchestrator slots',
+          failureRetryDelayMs(retry.attempt + 1, config),
+          options.nowMs,
+        )
+        continue
+      }
+
+      yield* state.releaseClaim(retry.issueId)
+      yield* dispatchIssue(issue, retry.attempt, config, options)
+    }
+  })
+}
+
+function dispatchIssue(
+  issue: Issue,
+  attempt: number | null,
+  config: ServiceConfig,
+  options: PollTickOptions,
+): Effect.Effect<
+  void,
+  PollTickError,
+  OrchestratorState | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | TrackerClient | LinearTransport
+> {
+  return Effect.gen(function* () {
+    const state = yield* OrchestratorState
+    const runner = yield* AgentRunner
+    const marked = yield* state.tryMarkRunning(
+      issue,
+      config,
+      options.nowMs,
+      attempt,
+      workspacePathFor(config.workspace.root, issue.identifier),
+    )
+
+    if (!marked) {
+      return
+    }
+
+    const worker = runner.runAttempt({
+      issue,
+      attempt,
+      config,
+      onCodexEvent: event => state.recordCodexEvent(issue.id, event),
+    }).pipe(
+      Effect.exit,
+      Effect.flatMap(exit => handleWorkerExitEffect(issue, exit._tag === 'Success'
+        ? { _tag: 'normal' }
+        : { _tag: 'failed', error: 'worker failed' }, config, options.nowMs)),
+    )
+
+    if (options.launchMode === 'inline') {
+      yield* worker
+      return
+    }
+
+    yield* Effect.forkChild(worker, { startImmediately: true })
+  })
+}
+
+function handleWorkerExitEffect(
+  issue: Issue,
+  reason: WorkerExitReason,
+  config: ServiceConfig,
+  nowMs: number,
+): Effect.Effect<void, never, OrchestratorState> {
+  return Effect.gen(function* () {
+    const state = yield* OrchestratorState
+
+    yield* state.handleWorkerExit(issue.id, reason, config, nowMs)
+  })
+}
+
+function isActive(issue: Issue, config: ServiceConfig): boolean {
+  const normalized = normalizeStateName(issue.state)
+
+  return config.tracker.activeStates.some(state => normalizeStateName(state) === normalized)
+}
+
+function isTerminal(issue: Issue, config: ServiceConfig): boolean {
+  const normalized = normalizeStateName(issue.state)
+
+  return config.tracker.terminalStates.some(state => normalizeStateName(state) === normalized)
+}

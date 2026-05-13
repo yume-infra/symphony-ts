@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { renderGreeting } from './greeting.js'
+import { command } from './cli/command.js'
 
-describe('renderGreeting', () => {
-  it('renders the current CLI greeting', () => {
-    expect(renderGreeting('Symphony')).toBe('Hello, Symphony!')
+describe('symphony-ts command', () => {
+  it('preserves the minimal CLI command name', () => {
+    expect(command.name).toBe('symphony-ts')
   })
 })
