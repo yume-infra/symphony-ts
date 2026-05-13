@@ -19,7 +19,12 @@ Added Effect tsgo infrastructure, replaced generic Trellis specs with Symphony-t
 
 ### Main Changes
 
-(Add details)
+- Replaced the greeting CLI stub with the thin `symphony-ts [workflow-path]` Effect CLI entrypoint.
+- Added workflow loading/reload, typed config resolution, prompt rendering, workspace hooks,
+  Linear tracking, `linear_graphql`, Codex app-server boundary, orchestrator state/runtime, and
+  structured logging.
+- Added deterministic tests across workflow/config/prompt/workspace/tracker/client-tools/agent-runner/
+  orchestrator/logging/CLI.
 
 ### Git Commits
 
@@ -30,7 +35,8 @@ Added Effect tsgo infrastructure, replaced generic Trellis specs with Symphony-t
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `rtk proxy pnpm verify`
+- [OK] `rtk proxy pnpm --filter symphony-ts smoke:bin`
 
 ### Status
 
@@ -259,6 +265,39 @@ Captured bare-agent Effect context discovery rules in AGENTS and TypeScript Effe
 | Hash | Message |
 |------|---------|
 | `5f20ced6c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 9: First-pass Symphony runtime
+
+**Date**: 2026-05-14
+**Task**: First-pass Symphony runtime
+**Branch**: `main`
+
+### Summary
+
+Implemented the first-pass TypeScript/Effect Symphony orchestration service, verified full repository gate and executable CLI smoke.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `79d7a52bd` | (see git log) |
 
 ### Testing
 
