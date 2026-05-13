@@ -19,3 +19,73 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
 <!-- TRELLIS:END -->
+
+## Project-Specific Agent Notes
+
+These notes are the temporary project authority until `.trellis/spec/` is rewritten. Do not update
+`.trellis/spec/` yet unless the user explicitly asks; the user is still collecting constraints.
+
+## Product Shape
+
+- `symphony-ts` is a TypeScript/Effect implementation of the Symphony service described in
+  `SPEC.md`.
+- Treat `SPEC.md` as the reference blueprint and terminology source, not as something to blindly
+  copy into implementation. Intentional project deviations must be called out and later recorded in
+  Trellis specs.
+- This is not a traditional frontend/backend application. The current Trellis `backend/` and
+  `frontend/` specs are init templates and should not drive implementation decisions.
+- The product is a long-running orchestration service distributed through a minimal CLI entrypoint.
+  The initial command shape is:
+
+  ```bash
+  symphony-ts [workflow-path]
+  ```
+
+- Keep the CLI thin: parse the optional workflow path, initialize the Effect runtime, start the
+  service, handle shutdown/startup errors, and return meaningful exit codes.
+- Runtime behavior belongs in Effect services and modules, not in command handlers.
+
+## Technical Boundaries
+
+- Use Effect as the main application runtime foundation for configuration, services, concurrency,
+  resource lifecycle, error handling, and integration boundaries.
+- Use the experimental `@effect/tsgo` toolchain directly for Effect language-service diagnostics.
+  This project intentionally chooses the aggressive path here: prefer the testing-stage tsgo-based
+  Effect LSP experience over the conservative standalone `@effect/language-service` setup.
+- Follow Effect's official LLM coding baseline: use `llms.txt` / `llms-full.txt` and topic docs as
+  navigation, but prefer a tight feedback loop with tsgo diagnostics plus local source/reference
+  material over guessing APIs from memory.
+- Effect best-practice source order is: current package versions in `package.json`, relevant Effect
+  official docs, local vendored/reference Effect source when available, tsgo diagnostics, then
+  project-local Trellis specs and AGENTS decisions.
+- `effect.website/docs/code-style/guidelines/` is the minimum style floor: run long-lived Node
+  programs with `NodeRuntime.runMain` and avoid tacit / point-free Effect calls when explicit
+  callbacks preserve inference and stack clarity.
+- When Effect source is vendored later, treat it as read-only reference material. Do not import from
+  vendored source; application code must import from normal package dependencies.
+- Keep `@effect/cli` as the CLI layer. Do not introduce another CLI framework such as Commander,
+  Yargs, oclif, cac, or interactive prompt tooling unless the user explicitly approves it.
+- Do not expand the CLI into subcommands, dashboards, setup wizards, or broad operator UX unless the
+  user asks for that scope.
+- Core implementation work should focus on the Symphony runtime: workflow loading, typed config,
+  dynamic reload, orchestrator state, Linear tracking, workspace management, Codex app-server
+  integration, retry/reconciliation, observability, and safety invariants.
+- AI/coding-agent infrastructure is part of the core product surface. Treat workspace isolation,
+  agent launch cwd safety, structured logs, non-stalling user-input policy, and conformance tests as
+  first-class implementation concerns.
+- The final project must include AI infrastructure. Use OpenAI Symphony's local `.codex/` setup as a
+  reference for useful patterns, but adapt it to this repository instead of copying it directly.
+  Skills such as commit, pull, push, land, Linear tooling, worktree bootstrap, and debug playbooks
+  should be introduced when the matching TypeScript runtime, CI, logging, and PR conventions exist.
+
+## Future Trellis Spec Direction
+
+When the user is ready to rewrite `.trellis/spec/`, prefer long-form spec layers aligned to this
+project instead of frontend/backend templates:
+
+- `symphony/`
+- `runtime-orchestration/`
+- `external-integrations/`
+- `typescript-effect/`
+- `testing-conformance/`
+- `quality-operations/`

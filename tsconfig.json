@@ -6,6 +6,28 @@
     "rootDir": "src",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": true,
+        "refactors": true,
+        "quickinfo": true,
+        "completions": true,
+        "ignoreEffectSuggestionsInTscExitCode": true,
+        "ignoreEffectWarningsInTscExitCode": false,
+        "ignoreEffectErrorsInTscExitCode": false,
+        "overrides": [
+          {
+            "include": ["src/**/*.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "floatingEffect": "error"
+              }
+            }
+          }
+        ]
+      }
+    ],
     "types": ["node"],
     "strict": true,
     "noFallthroughCasesInSwitch": true,
