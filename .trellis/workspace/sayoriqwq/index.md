@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
+- **Total Sessions**: 4
 - **Last Active**: 2026-05-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~107 | Active |
+| `journal-1.md` | ~138 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-05-13 | Plan Effect-first test infrastructure | - | `main` |
 | 3 | 2026-05-13 | Migrate Symphony-ts CLI to monorepo | `711f406` | `main` |
 | 2 | 2026-05-13 | Plan strict Symphony conformance | `7c1b7d3` | `main` |
 | 1 | 2026-05-13 | Bootstrap Symphony-ts specs | `d7e7785`, `9c4d425` | `main` |

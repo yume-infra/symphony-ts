@@ -105,3 +105,34 @@ Migrated the generated Symphony-ts CLI from a single-package layout into a creat
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Plan Effect-first test infrastructure
+
+**Date**: 2026-05-13
+**Task**: Plan Effect-first test infrastructure
+**Branch**: `main`
+
+### Summary
+
+Created and archived a planning task for the next test-infrastructure slice. The task captures requirements, design, implementation checklist, and checklist scope for Effect-first Vitest helpers, fake boundaries, and first CLI behavior tests. No runtime implementation was started.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
