@@ -1,0 +1,49 @@
+{
+  "name": "symphony-ts",
+  "type": "module",
+  "version": "0.0.0",
+  "description": "A TypeScript/Effect implementation of the Symphony orchestration service",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "symphony-ts": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.22.1"
+  },
+  "scripts": {
+    "build": "tsdown --config tsdown.config.ts && node scripts/ensure-shebang.mjs",
+    "dev": "tsdown --config tsdown.config.ts --watch",
+    "prepack": "pnpm build",
+    "smoke:bin": "pnpm build && dist/index.js --help",
+    "test": "vitest run",
+    "typecheck": "tsgo --noEmit",
+    "typecheck:tsc": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@effect/cli": "catalog:",
+    "@effect/platform": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/printer": "catalog:",
+    "@effect/printer-ansi": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

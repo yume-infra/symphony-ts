@@ -1,0 +1,48 @@
+autoInstallPeers: true
+
+catalogMode: manual
+
+cleanupUnusedCatalogs: true
+
+dedupeDirectDeps: true
+
+optimisticRepeatInstall: true
+
+resolvePeersFromWorkspaceRoot: true
+
+shellEmulator: true
+
+trustPolicy: no-downgrade
+
+packages:
+  - apps/*
+  - libs/*
+
+catalog:
+  '@antfu/eslint-config': ^9.0.0
+  '@commitlint/cli': ^21.0.1
+  '@commitlint/config-conventional': ^21.0.1
+  '@effect/cli': ^0.75.1
+  '@effect/platform': ^0.96.1
+  '@effect/platform-node': ^0.106.0
+  '@effect/printer': ^0.49.0
+  '@effect/printer-ansi': ^0.49.0
+  '@effect/tsgo': ^0.7.0
+  '@types/node': ^25.6.0
+  '@typescript/native-preview': 7.0.0-dev.20260513.1
+  effect: ^3.21.2
+  eslint: ^10.3.0
+  husky: ^9.1.7
+  knip: ^6.12.0
+  lint-staged: ^17.0.2
+  taze: ^19.11.0
+  tsdown: ^0.22.0
+  turbo: ^2.9.9
+  typescript: ^6.0.3
+  vitest: ^4.1.5
+
+updateConfig:
+  ignoreDependencies:
+    - typescript
+
+verifyDepsBeforeRun: error

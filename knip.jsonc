@@ -1,9 +1,15 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
   "ignoreDependencies": [
+    "@effect/tsgo",
+    "@typescript/native-preview",
     "@effect/language-service"
   ],
-  "ignoreBinaries": [
-    "dist/index.js"
-  ]
+  "workspaces": {
+    "apps/cli": {
+      "ignoreBinaries": [
+        "dist/index.js"
+      ]
+    }
+  }
 }

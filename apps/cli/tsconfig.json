@@ -40,5 +40,5 @@
     "skipLibCheck": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src", "tests"]
 }
