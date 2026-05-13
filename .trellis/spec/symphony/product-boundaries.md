@@ -25,7 +25,9 @@ reconciles tracker state.
 ## Non-Goals
 
 - Do not build a rich CLI product with many subcommands by default.
-- Do not build a web dashboard unless explicitly scoped later.
+- Do not build a human-readable status surface, HTTP server, web dashboard, or JSON REST API in the
+  first implementation pass.
+- Do not build SSH worker execution in the first implementation pass.
 - Do not turn the orchestrator into a general-purpose workflow engine.
 - Do not copy OpenAI Symphony's Elixir-specific `.codex/` setup directly.
 - Do not treat tracker writes as orchestrator business logic unless a future decision changes that
@@ -52,3 +54,9 @@ asks for that scope.
 - Why: The project should follow the reference contract while preserving room for deliberate product
   choices.
 - Consequence: Changes that diverge from `SPEC.md` must update `spec-interpretation.md`.
+
+- Decision: first-pass conformance excludes dashboard/status UI, HTTP API, and SSH workers.
+- Why: The first implementation pass should focus on the scheduler/runner/tracker/Codex runtime
+  contract instead of expanding the operator surface or distributed execution model.
+- Consequence: These features remain second-pass or later extensions, not blockers for first-pass
+  required conformance.

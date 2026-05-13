@@ -15,6 +15,8 @@ Every scheduler tick should:
 
 - Normal worker exit schedules a short continuation retry unless a future documented decision changes
   this mechanism.
+- Continuation retry is first-pass conformance scope; do not replace it with "worker succeeded means
+  issue complete" semantics.
 - Failure-driven retry uses exponential backoff capped by `agent.max_retry_backoff_ms`.
 - A retry entry stores issue ID, identifier, attempt, due time, timer/fiber handle, and error reason.
 - Slot exhaustion requeues with an explicit error reason.
@@ -32,6 +34,16 @@ State refresh behavior:
 - active state -> update running issue snapshot
 - neither active nor terminal -> terminate worker without workspace cleanup
 - refresh failure -> keep workers running and try again next tick
+
+## Checklist Alignment
+
+Keep the active task's `spec-conformance-checklist.md` synchronized when implementing:
+
+- continuation retry after normal worker exit
+- exponential retry and configured backoff cap
+- slot exhaustion retry requeue
+- stall detection and cancellation
+- terminal-state workspace cleanup at startup and active transition
 
 ## Startup Cleanup
 

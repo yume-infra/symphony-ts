@@ -49,3 +49,13 @@ Use typed errors for:
 Symphony is primarily a tracker reader. Tracker writes usually belong to the coding agent using
 tools available in the workflow/runtime environment. Do not add orchestrator-level write business
 logic without a project decision.
+
+## `linear_graphql` Tool Boundary
+
+First-pass conformance includes the `linear_graphql` client-side tool extension. Keep it outside
+orchestrator business logic:
+
+- the tracker service owns endpoint/auth transport behavior
+- the client-tool boundary validates tool input and output shape
+- the agent runner advertises and routes the tool through the targeted app-server protocol
+- raw Linear tokens are never exposed in prompts, tool descriptions, logs, or shell helpers

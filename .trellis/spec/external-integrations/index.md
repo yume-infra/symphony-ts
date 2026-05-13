@@ -12,6 +12,7 @@ or client-side tool exposure.
 - [ ] Identify whether the change is tracker, agent protocol, prompt, or tool surface.
 - [ ] Check `SPEC.md` sections 10, 11, and 12.
 - [ ] Use current external protocol docs or generated schemas when protocol shape matters.
+- [ ] Treat `linear_graphql` as first-pass scope and HTTP/dashboard integrations as deferred.
 - [ ] Keep orchestrator business logic separate from integration transport details.
 
 ## Quality Check
@@ -19,7 +20,16 @@ or client-side tool exposure.
 - [ ] External failures map to typed errors.
 - [ ] Raw tokens are not exposed to coding agents unless explicitly intended.
 - [ ] Codex protocol assumptions are validated against current schema/docs.
+- [ ] Unsupported app-server tools fail structurally without stalling the session.
 - [ ] Prompt rendering uses strict variable/filter semantics.
+
+## First-Pass Extension Scope
+
+First pass includes the `linear_graphql` client-side tool extension because tracker writes normally
+belong to the coding agent toolchain rather than orchestrator business logic.
+
+First pass excludes the HTTP server, dashboard, and JSON REST API extension. Those features are
+operator surfaces, not integration prerequisites for the scheduler/runner core.
 
 ## Guides
 

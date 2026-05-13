@@ -5,6 +5,19 @@
 AI/coding-agent infrastructure is part of the final product surface. It should be introduced as the
 runtime and repository conventions mature, not copied wholesale from another project.
 
+## First-Pass Priority
+
+Before handing main runtime implementation to `/goal`, prioritize:
+
+1. worktree/bootstrap rules for agent runs
+2. dependency install and validation commands for the monorepo
+3. cwd and package-target safety rules
+4. `/goal` context-loading rules
+5. seed debug playbooks
+
+Defer complete commit/push/land skills until the core runtime, CI behavior, logging format, and PR
+conventions exist.
+
 ## Reference Material
 
 OpenAI Symphony's `.codex/` setup is useful reference material for:
@@ -29,6 +42,27 @@ Likely future `.codex/skills` or project-local equivalents:
 - `linear`: use Symphony's configured `linear_graphql` tool
 - `debug`: trace runtime logs by issue/session identifiers
 - `worktree`: initialize isolated workspaces for agent runs
+
+## Seed And Living Debug Playbooks
+
+The first debug playbooks are seed artifacts. They should record official/local diagnostic entry
+points and investigation order, not pretend to contain lessons the project has not learned yet.
+
+Create seed playbooks for:
+
+- Effect and `@effect/tsgo` diagnostics
+- Codex app-server protocol/schema drift
+- Linear fake and real integration paths
+- orchestrator concurrency, retry, reconciliation, and stalls
+
+During implementation, update playbooks when real issues occur. Each update should capture:
+
+- symptom
+- root cause
+- failed fixes and why they were insufficient
+- correct investigation order
+- test or assertion added
+- whether a spec or checklist update is needed
 
 ## Introduction Rule
 

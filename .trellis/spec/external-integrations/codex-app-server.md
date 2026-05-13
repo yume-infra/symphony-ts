@@ -5,6 +5,10 @@
 Use the targeted Codex app-server documentation or generated schema as the protocol source of truth.
 Do not hardcode protocol shapes from memory or from stale examples.
 
+Before implementing or changing protocol payloads, generate or inspect the targeted app-server
+schema for the installed Codex version. `SPEC.md` describes Symphony responsibilities, not the
+authoritative Codex wire schema.
+
 Symphony-specific rules still control:
 
 - workspace cwd selection
@@ -21,6 +25,9 @@ Symphony-specific rules still control:
 - Launch from the per-issue workspace path only.
 - Supply cwd through protocol fields wherever the targeted protocol accepts it.
 - Include issue-identifying metadata when supported.
+- Treat Codex config values such as approval and sandbox settings as pass-through values for the
+  targeted schema unless a local validator is explicitly added.
+- Use a safe max-line-size policy for protocol buffering.
 
 ## Session Handling
 
@@ -28,6 +35,8 @@ Symphony-specific rules still control:
 - Compose `session_id = "<thread_id>-<turn_id>"`.
 - Reuse the same thread for continuation turns inside one worker run.
 - Do not resend the original full prompt for continuation turns already in the same thread.
+- Keep the app-server subprocess alive across continuation turns inside one worker run when the
+  targeted protocol permits it.
 
 ## User Input And Approvals
 
@@ -52,3 +61,16 @@ Extract and emit structured runtime events for:
 - malformed/unexpected messages
 
 Keep diagnostic stderr handling separate from protocol stream handling when using stdio transports.
+
+## Dynamic Tool Handling
+
+- Advertise implemented client-side tools during session startup using the targeted protocol.
+- Handle supported dynamic tools according to their extension contract.
+- Return a targeted-protocol tool failure for unsupported tool names.
+- Do not let unsupported tool calls stall the session.
+
+## Seed Debug Playbook
+
+Before `/goal` implementation, create a seed debug playbook for Codex app-server work. It should
+start from official docs or generated schema, then record how to inspect protocol drift, startup
+payload failures, tool-call failures, usage/rate-limit extraction, and no-stall behavior.

@@ -12,10 +12,23 @@ Before a long implementation loop, ensure the active task includes:
 - task `prd.md`
 - task `design.md`
 - task `implement.md`
+- the active task's `spec-conformance-checklist.md` for first-pass implementation
 - relevant `.trellis/spec/*/index.md`
 - detailed specs for touched layers
+- Effect pattern docs generated from the pinned monorepo reference
+- monorepo package specs after migration
+- testing/conformance docs
 - `AGENTS.md`
 - relevant `SPEC.md` sections
+
+## Pre-Handoff Requirements
+
+Before broad runtime implementation is handed to `/goal`, complete:
+
+- Effect reference vendoring and pattern docs
+- monorepo migration
+- Vitest/Effect test infrastructure
+- minimum AI infrastructure and seed debug playbooks
 
 ## Suggested `/goal` Flow
 

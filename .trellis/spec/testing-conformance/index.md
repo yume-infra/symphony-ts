@@ -11,15 +11,24 @@ done.
 
 - [ ] Identify which `SPEC.md` section the behavior implements.
 - [ ] Decide whether the behavior is core conformance, extension conformance, or real integration.
+- [ ] Use Vitest for first-pass conformance tests.
+- [ ] Use Effect-first test helpers for running programs and providing layers.
 - [ ] Prefer deterministic unit tests for core behavior.
 - [ ] Use fakes for Linear and Codex unless the test is explicitly a real integration profile.
 
 ## Quality Check
 
 - [ ] Core conformance behavior has deterministic coverage.
+- [ ] Tests can run in the monorepo package layout.
 - [ ] Real integration tests are explicit and skip clearly when credentials are unavailable.
 - [ ] Project validation passes.
 - [ ] Test failures point to a specific contract violation.
+
+## First-Pass Test Runner
+
+Vitest is the first-pass test runner. The important convention is Effect-first test structure:
+tests should run explicit Effect programs with shared helpers and provide fake layers for external
+boundaries.
 
 ## Guides
 

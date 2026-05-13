@@ -1,8 +1,17 @@
 # Project Structure
 
+## Monorepo Prerequisite
+
+Main runtime implementation should assume Symphony-ts has already been migrated to the monorepo
+shape selected from the user's setup reference. Do not design long-lived runtime paths around the
+current single-package layout.
+
+Until the migration is complete, keep spec guidance package-agnostic and preserve the public
+`symphony-ts [workflow-path]` command shape.
+
 ## Entry Point
 
-`src/index.ts` should stay thin:
+The package entrypoint should stay thin:
 
 - define the CLI command
 - parse optional workflow path
@@ -13,10 +22,11 @@ Do not put orchestration, Linear, workspace, or Codex logic directly in the entr
 
 ## Suggested Runtime Modules
 
-The exact structure may evolve, but implementation should separate these boundaries:
+The exact monorepo paths will be decided during migration, but implementation should separate these
+boundaries:
 
 ```text
-src/
+<runtime-package>/src/
   cli/
   config/
   workflow/
@@ -39,6 +49,13 @@ src/
 - `agent-runner/` owns Codex app-server protocol integration.
 - `orchestrator/` owns scheduling state and worker coordination.
 - `observability/` owns structured logging, metrics, and optional status snapshots.
+
+## Migration Expectations
+
+- Move existing package/tooling into the target monorepo layout without changing runtime behavior.
+- Update package scripts, validation commands, and Trellis package discovery after migration.
+- Keep future `/goal` instructions aligned to monorepo paths.
+- Do not start broad runtime work until package boundaries are stable.
 
 ## Dependency Direction
 

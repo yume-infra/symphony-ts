@@ -11,6 +11,8 @@ scope. This project is a TypeScript/Effect implementation of the Symphony servic
 ## Pre-Development Checklist
 
 - [ ] Read `SPEC.md` sections relevant to the change.
+- [ ] Check the active task's `spec-conformance-checklist.md` when working on first-pass runtime
+      conformance.
 - [ ] Treat `SPEC.md` as the conformance baseline unless a project decision explicitly diverges.
 - [ ] Confirm the change fits the minimal command shape: `symphony-ts [workflow-path]`.
 - [ ] Keep the product framed as a long-running orchestration service, not a traditional CLI utility
@@ -20,6 +22,7 @@ scope. This project is a TypeScript/Effect implementation of the Symphony servic
 ## Quality Check
 
 - [ ] No behavior silently contradicts `SPEC.md`.
+- [ ] Required conformance, optional extensions, and deferred work are labeled explicitly.
 - [ ] Project-specific choices are documented as decisions, not hidden in code.
 - [ ] Domain names match the vocabulary in `domain-model.md`.
 - [ ] The change can be understood by a future `/goal` run without reading chat history.
@@ -35,3 +38,9 @@ scope. This project is a TypeScript/Effect implementation of the Symphony servic
 ## Language
 
 Project specs are written in English so all AI tooling can consume them consistently.
+
+## First-Pass Conformance Tracker
+
+For the current strict first-pass plan, use the active task checklist at
+`.trellis/tasks/05-13-plan-symphony-trellis-specs/spec-conformance-checklist.md` as the working
+progress tracker. Treat it as task progress, not a replacement for `SPEC.md`.

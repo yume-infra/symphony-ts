@@ -1,5 +1,10 @@
 # Safety Invariants
 
+## Safety Posture
+
+First-pass conformance must document the intended trust boundary and the approval/sandbox/operator
+confirmation posture for coding-agent sessions. Do not leave these as implicit runtime defaults.
+
 ## Workspace Safety
 
 - Per-issue workspace paths must be inside workspace root.
@@ -13,6 +18,7 @@
 - Do not expose raw Linear tokens to coding-agent prompts.
 - Prefer configured tool surfaces over shell helpers for authenticated tracker operations.
 - Redact secrets in logs and errors.
+- Validate secret presence without printing secret values.
 
 ## Process Safety
 
@@ -20,6 +26,14 @@
 - User input and approval requests must not stall a run indefinitely.
 - Unsupported tool calls must fail structurally and let the session continue or fail according to
   policy.
+- Hook output should be truncated in logs.
+- Hook timeouts are required to prevent orchestrator hangs.
+
+## Harness Hardening
+
+Document recommended deployment hardening separately from program-enforced guarantees. Examples
+include dedicated OS users, workspace-root permission restrictions, dedicated volumes, tighter Codex
+approval/sandbox settings, network restrictions, and narrower tracker/tool scopes.
 
 ## Review Priority
 

@@ -18,6 +18,23 @@ Track at minimum:
 - aggregate Codex token/runtime totals
 - latest Codex rate-limit snapshot
 
+## Internal Snapshot Contract
+
+The first implementation pass includes an internal runtime snapshot contract. It is not an HTTP API
+or dashboard; it is a synchronous service boundary for tests, future status surfaces, and debugging.
+
+Snapshot data must come from orchestrator state and metrics only. Do not make correctness depend on
+a UI, HTTP server, or human-readable renderer.
+
+The snapshot should expose:
+
+- running session rows, including `turn_count`
+- retry queue rows
+- aggregate Codex token totals
+- aggregate runtime seconds
+- latest rate-limit payload when available
+- explicit timeout or unavailable errors when the snapshot cannot be produced
+
 ## Dispatch Invariants
 
 - Reconcile before dispatch on every tick.

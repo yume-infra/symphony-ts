@@ -10,6 +10,9 @@ pnpm verify
 
 This is the default local validation gate.
 
+After monorepo migration and Vitest adoption, update this section with workspace-aware test and
+verification commands. Runtime implementation should not rely on stale single-package commands.
+
 ## Supporting Commands
 
 ```bash
@@ -22,6 +25,9 @@ pnpm smoke:bin
 ```
 
 Use `pnpm smoke:bin` when CLI behavior or packaging changes.
+
+Vitest should be added before broad runtime implementation so deterministic conformance tests can be
+written alongside features rather than after the fact.
 
 ## Dependency Freshness
 

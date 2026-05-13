@@ -29,17 +29,40 @@ Default to implementing these as written:
 - structured logs with issue/session context
 - core conformance tests from sections 17 and 18
 
+## First-Pass Conformance Scope
+
+The first implementation pass targets strict conformance, not a deliberately narrowed MVP.
+
+In scope for the first pass:
+
+- all Section 18.1 `REQUIRED for Conformance` items
+- core-path `SHOULD` and `RECOMMENDED` clauses that support required runtime behavior
+- safety posture and documentation clauses
+- internal runtime snapshot contract
+- `linear_graphql` client-side tool extension
+
+Deferred from the first pass:
+
+- human-readable status surface
+- HTTP server, dashboard, and JSON REST API extension
+- Section 18.2 future extension TODOs
+- Appendix A SSH worker extension
+
+These deferrals are not required-conformance deviations because `SPEC.md` labels them optional,
+recommended, extension, production-validation, or appendix work.
+
 ## Implementation-Defined Areas
 
 These require explicit project decisions before implementation details are locked:
 
 - approval and sandbox posture for coding-agent sessions
 - exact workspace population strategy
-- status surface or dashboard shape
-- whether the optional HTTP server extension is shipped
-- whether the `linear_graphql` client-side tool is included in MVP
+- status surface or dashboard shape for a second pass
+- optional HTTP server extension shape for a second pass
 - whether retry/session metadata is persisted across restarts
 - exact real-integration test profile and credentials strategy
+
+Decision already made: `linear_graphql` is included in first-pass scope.
 
 ## Deviation Format
 
@@ -57,5 +80,5 @@ Record intentional divergence like this:
 
 ## Current Deviations
 
-No product deviations are approved yet. The current plan is to follow `SPEC.md` by default and defer
-MVP deviations to the next planning task.
+No required-conformance deviations are approved. The current plan is to follow `SPEC.md` strictly
+for first-pass conformance while deferring optional or recommended extension work called out above.

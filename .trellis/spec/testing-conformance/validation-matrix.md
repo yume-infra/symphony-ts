@@ -17,6 +17,9 @@ This currently includes:
 
 Use `pnpm typecheck:tsc` as a fallback check when investigating tsgo/native-preview issues.
 
+After the Vitest environment is added, project validation should include deterministic test runs.
+After monorepo migration, this section must be updated with workspace-aware commands.
+
 ## Core Conformance Areas
 
 Map tests to `SPEC.md` sections 17 and 18:
@@ -36,12 +39,14 @@ Map tests to `SPEC.md` sections 17 and 18:
 
 Only required when implemented:
 
-- HTTP status surface
-- `linear_graphql` client tool
+- `linear_graphql` client tool (first-pass scope)
+- HTTP status surface (deferred)
 - humanized event summaries
 - persisted retry/session metadata
 - first-class tracker writes
 - non-Linear tracker adapters
+
+HTTP server, dashboard, JSON REST API, and SSH workers are deferred from first-pass conformance.
 
 ## Definition Of Done For Runtime Features
 

@@ -2,8 +2,9 @@
 
 ## Tool Policy
 
-Client-side tools exposed to coding-agent sessions are optional extensions. Add them only when the
-runtime can advertise, validate, execute, and report failures without stalling the agent session.
+Client-side tools exposed to coding-agent sessions are optional extensions. First-pass scope includes
+`linear_graphql`; add any other tool only when the runtime can advertise, validate, execute, and
+report failures without stalling the agent session.
 
 Unsupported dynamic tool calls must return structured tool failure results rather than blocking.
 
@@ -23,6 +24,9 @@ Requirements if implemented:
 - reuses configured Linear endpoint and auth
 - preserves GraphQL error payloads for debugging
 - returns structured success/failure output
+- returns `success=false` for top-level GraphQL errors while preserving the response body
+- returns structured failures for invalid input, missing auth, and transport errors
+- never exposes raw tokens to the coding agent
 
 ## Security Boundary
 
@@ -31,4 +35,5 @@ not read secrets from disk.
 
 ## Current Status
 
-No client-side tools are implemented yet. This layer records the expected shape for future work.
+`linear_graphql` is first-pass implementation scope. Other client-side tools are out of scope until
+a project decision adds them.

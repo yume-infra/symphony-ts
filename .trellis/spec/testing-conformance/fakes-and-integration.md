@@ -12,6 +12,17 @@ Use fakes for deterministic tests:
 
 Effect services/layers should make these fakes easy to provide.
 
+## Vitest And Effect Helpers
+
+Before runtime implementation, add test helpers that:
+
+- run Effect programs through a single Vitest helper
+- provide common test layers explicitly
+- expose fake clocks or controllable scheduling for time-dependent behavior
+- fail tests with typed error/cause details that point to the violated contract
+
+Do not scatter raw `Effect.runPromise` calls and ad hoc layer setup across test files.
+
 ## Real Integration Profile
 
 Real integration tests are recommended before production use but should not silently run in normal
@@ -26,6 +37,8 @@ Real tests may require:
 
 When skipped due to missing credentials or environment, report as skipped. Do not treat an unrun real
 integration test as passed.
+
+If a real integration profile is explicitly enabled, failures should fail that job.
 
 ## Time-Dependent Tests
 

@@ -27,15 +27,17 @@ Use official docs and LLM files as navigation:
 - topic-specific docs
 
 But do not rely on memory or isolated snippets for complex Effect code. Prefer current package
-versions, local source/reference material when available, and tsgo feedback.
+versions, project-local pattern docs, vendored source/reference material, and tsgo feedback.
 
-## Future Source Reference
+## Source Reference Gate
 
-When Effect source is vendored later, use it as read-only reference material:
+Before main runtime implementation, vendor the full upstream Effect monorepo and pin it to a
+commit/tag aligned with current dependency versions. Use it as read-only reference material:
 
 - inspect examples, tests, module structure, and API design
 - do not edit vendored files unless explicitly asked
 - do not import from vendored source
 - application code imports from package dependencies
 
-Pattern docs such as `agent-patterns/effect-schema.md` may be generated later from vendored source.
+Project-local pattern docs must summarize the parts future agents should use so implementation does
+not devolve into broad source spelunking.

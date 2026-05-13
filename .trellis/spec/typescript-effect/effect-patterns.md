@@ -1,5 +1,22 @@
 # Effect Patterns
 
+## Pattern Docs Gate
+
+Before main runtime implementation, generate or curate project-local pattern docs from the pinned
+Effect monorepo reference and current official docs. These docs should be the first place future
+agents look after `SPEC.md`; the vendored source is the fallback for API details and examples.
+
+Minimum pattern topics:
+
+- services, tags, contexts, and layers
+- scoped resources, acquire/release, and finalizers
+- fibers, interruption, and worker cancellation
+- schedules for polling, retry, backoff, and timeouts
+- refs/queues or equivalent state tools for orchestrator state
+- typed errors for config, tracker, workspace, hooks, Codex, and rendering boundaries
+- `@effect/cli` entrypoint shape and `NodeRuntime.runMain`
+- `@effect/tsgo` diagnostics loop for agents
+
 ## Services And Layers
 
 Use Effect services and layers for runtime capabilities:
@@ -52,3 +69,8 @@ when overloads, optional parameters, or inference could be ambiguous.
 Prefer `@effect/platform` abstractions for filesystem, path, command, terminal, and logging work
 where available. Direct Node APIs are acceptable only when the Effect platform surface is missing or
 would add inappropriate complexity; document that choice locally.
+
+## Reference Boundary
+
+Vendored Effect source is read-only reference material. Application code must import from normal
+package dependencies, not from `repos/effect/` or any generated reference tree.
