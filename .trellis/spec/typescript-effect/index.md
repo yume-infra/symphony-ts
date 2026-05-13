@@ -9,8 +9,9 @@ Read this layer before writing TypeScript runtime code.
 ## Pre-Development Checklist
 
 - [ ] Check current dependency versions in `package.json`.
-- [ ] For runtime implementation, confirm the full upstream Effect monorepo reference has been
-      vendored and pinned.
+- [ ] Confirm the active Effect baseline in `pnpm-lock.yaml`: `effect@4.0.0-beta.66` and
+      `@effect/platform-node@4.0.0-beta.66` unless package metadata says otherwise.
+- [ ] Confirm `repos/effect/` exists as the only vendored upstream Effect source path.
 - [ ] Read the project-local Effect pattern docs before writing service, layer, fiber, schedule, or
       resource code.
 - [ ] Use `@effect/tsgo` diagnostics; do not assume generic TypeScript feedback is enough.
@@ -30,7 +31,7 @@ Read this layer before writing TypeScript runtime code.
 
 Do not hand the main runtime implementation to `/goal` until the repository has:
 
-- full upstream Effect monorepo reference material pinned to a version-aligned commit/tag
+- upstream Effect v4 beta source reference material under `repos/effect/`
 - curated project-local Effect pattern docs
 - monorepo layout migration completed from the user's setup reference
 - Vitest/Effect test infrastructure in place

@@ -25,6 +25,27 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 These notes are the temporary project authority until `.trellis/spec/` is rewritten. Do not update
 `.trellis/spec/` yet unless the user explicitly asks; the user is still collecting constraints.
 
+## Bare Agent Effect Bootstrap
+
+When an agent has no conversation history and is asked where Effect content lives or how to write
+Effect code, its answer must include this checklist before proposing implementation:
+
+- This is a context-discovery question, not implementation. Do not stop after saying that context is
+  loaded, and do not ask whether to create a Trellis task unless the user asks to change code.
+- Read first: `docs/effect-patterns/index.md`.
+- Code-spec entry: `.trellis/spec/typescript-effect/index.md`.
+- Upstream source reference: `repos/effect/`, a read-only squashed subtree from
+  `Effect-TS/effect-smol`.
+- Package authority: `package.json` and `pnpm-lock.yaml`.
+- Active baseline: `effect@4.0.0-beta.66` and `@effect/platform-node@4.0.0-beta.66`.
+- Import boundary: application and tests import from installed dependencies only; never import from
+  `repos/effect/`.
+- Current v4 beta patterns: `effect/unstable/cli/Command`, `effect/unstable/cli/Flag`,
+  `@effect/platform-node/NodeRuntime`, `@effect/platform-node/NodeServices`,
+  `NodeRuntime.runMain`, and `Context.Service`.
+- Validation loop: use `tsgo` through `rtk proxy pnpm --filter symphony-ts typecheck`, or the full
+  `rtk proxy pnpm verify` gate.
+
 ## Product Shape
 
 - `symphony-ts` is a TypeScript/Effect implementation of the Symphony service described in
@@ -49,6 +70,13 @@ These notes are the temporary project authority until `.trellis/spec/` is rewrit
 
 - Use Effect as the main application runtime foundation for configuration, services, concurrency,
   resource lifecycle, error handling, and integration boundaries.
+- Bare agents with no conversation history must be able to locate the Effect context from this file.
+  When asked where Effect lives or how to write Effect code, report these project entry points before
+  coding:
+  - `docs/effect-patterns/index.md` is the first local Effect pattern index.
+  - `repos/effect/` is the only vendored upstream Effect source path.
+  - `.trellis/spec/typescript-effect/index.md` is the Trellis code-spec entry for Effect work.
+  - `package.json` plus `pnpm-lock.yaml` are the package-version authority.
 - The active Effect dependency baseline is Effect v4 beta. Treat `effect@4.0.0-beta.66` and
   matching v4 beta packages as the implementation API unless package metadata or `pnpm-lock.yaml`
   proves otherwise.
@@ -69,6 +97,12 @@ These notes are the temporary project authority until `.trellis/spec/` is rewrit
   `Effect-TS/effect-smol`. Use it for source, tests, examples, and API design reference only. Do
   not edit vendored files unless explicitly asked, and never import from `repos/effect` in
   application or test code.
+- Effect v4 beta implementation must use dependency imports, not vendored paths:
+  - CLI: `effect/unstable/cli/Command` and `effect/unstable/cli/Flag`
+  - Node runtime: `@effect/platform-node/NodeRuntime`
+  - Node services layer: `@effect/platform-node/NodeServices`
+  - Service definitions: `Context.Service`
+  - Long-running entrypoints: `NodeRuntime.runMain`
 - Use the Effect v4 beta CLI module at `effect/unstable/cli` as the CLI layer. Do not keep the
   legacy `@effect/cli` package in application dependencies while migrating to v4 beta because its
   latest published package peers on Effect v3. Do not introduce another CLI framework such as
