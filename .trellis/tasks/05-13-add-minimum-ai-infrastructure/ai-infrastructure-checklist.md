@@ -2,31 +2,33 @@
 
 ## Worktree And Bootstrap
 
-- [ ] Worktree/bootstrap rules documented.
-- [ ] Dependency install command documented.
-- [ ] Validation commands documented.
-- [ ] cwd/package-target safety rules documented.
-- [ ] Generated/cache ignore expectations documented.
+- [x] Planned maintained docs location: `docs/ai/`.
+- [x] Worktree/bootstrap rules documented.
+- [x] Dependency install command documented.
+- [x] Validation commands documented.
+- [x] cwd/package-target safety rules documented.
+- [x] Generated/cache ignore expectations documented.
 
 ## `/goal` Context
 
-- [ ] Required context list documented.
-- [ ] Layer/spec loading order documented.
-- [ ] Effect pattern docs hook documented.
-- [ ] Testing/conformance docs hook documented.
-- [ ] Context hygiene rules documented.
+- [x] Required context list documented.
+- [x] Layer/spec loading order documented.
+- [x] Effect pattern docs hook documented.
+- [x] Testing/conformance docs hook documented.
+- [x] Context hygiene rules documented.
 
 ## Seed Playbooks
 
-- [ ] Effect/tsgo playbook exists.
-- [ ] Codex app-server playbook exists.
-- [ ] Linear integration playbook exists.
-- [ ] Orchestrator runtime playbook exists.
-- [ ] Living-playbook update template exists.
+- [x] Effect/tsgo playbook exists.
+- [x] Codex app-server playbook exists.
+- [x] Linear integration playbook exists.
+- [x] Orchestrator runtime playbook exists.
+- [x] Living-playbook update template exists.
 
 ## Deferred
 
-- [ ] Full commit skill remains deferred.
-- [ ] Full push skill remains deferred.
-- [ ] Full land skill remains deferred.
-- [ ] Runtime implementation remains out of scope.
+- [x] Full commit skill remains deferred.
+- [x] Full push skill remains deferred.
+- [x] Full land skill remains deferred.
+- [x] New AI infrastructure skills remain deferred until workflows stabilize.
+- [x] Runtime implementation remains out of scope.

@@ -21,9 +21,20 @@ will rely on while implementing Symphony runtime modules. It should not introduc
   - seed debug playbooks
 - Debug playbooks should start as seed artifacts and become living docs during implementation.
 - OpenAI Symphony's `.codex/` setup may be used as reference, but must not be copied blindly.
+- The repository currently has project-local `.agents/`, `.codex/`, `.trellis/spec/`, `apps/cli/`,
+  and `libs/` paths, but no maintained `docs/` convention yet.
+- `README.md` already documents the pnpm monorepo shape and the root/package-level validation
+  commands that the AI infrastructure should reference.
+- The current implementation package is `apps/cli`; future runtime/domain/testing packages are
+  expected under `libs/`.
+- This task should use a docs-first approach. Do not create project-local AI infrastructure skills
+  yet; defer skills until the repeated workflows, command contracts, logs, CI behavior, and
+  Linear/Codex integration surfaces are stable.
 
 ## Requirements
 
+- Create the maintained AI infrastructure docs under `docs/ai/` so future `/goal` prompts can load
+  them directly without treating them as Trellis-managed specs or Codex runtime config.
 - Document worktree/bootstrap rules for agent runs in this monorepo.
 - Document dependency install and validation commands.
 - Document cwd and package-target safety rules for future agent launch/implementation work.
@@ -48,31 +59,42 @@ will rely on while implementing Symphony runtime modules. It should not introduc
   - test/assertion added
   - spec/checklist update needed
 - Keep full commit/push/land automation out of scope.
+- Keep `.agents/skills/` and `.codex/skills/` creation out of scope for this task. Future skills
+  should be thin procedural wrappers around stable workflows and should link to `docs/ai/` rather
+  than duplicating the maintained docs.
 - Do not implement Symphony runtime behavior.
 
 ## Acceptance Criteria
 
-- [ ] Worktree/bootstrap rules exist.
-- [ ] Dependency install and validation commands are documented.
-- [ ] cwd/package-target safety rules exist.
-- [ ] `/goal` context-loading rules exist.
-- [ ] Seed debug playbook exists for Effect/tsgo.
-- [ ] Seed debug playbook exists for Codex app-server schema/protocol drift.
-- [ ] Seed debug playbook exists for Linear fake/real integration.
-- [ ] Seed debug playbook exists for orchestrator concurrency/retry/reconciliation/stalls.
-- [ ] Living-playbook update format is documented.
-- [ ] Full commit/push/land skills remain deferred.
-- [ ] `pnpm verify` passes if maintained docs are linted by the project.
-- [ ] No Symphony runtime modules are implemented.
+- [x] Worktree/bootstrap rules exist.
+- [x] Dependency install and validation commands are documented.
+- [x] cwd/package-target safety rules exist.
+- [x] `/goal` context-loading rules exist.
+- [x] Seed debug playbook exists for Effect/tsgo.
+- [x] Seed debug playbook exists for Codex app-server schema/protocol drift.
+- [x] Seed debug playbook exists for Linear fake/real integration.
+- [x] Seed debug playbook exists for orchestrator concurrency/retry/reconciliation/stalls.
+- [x] Living-playbook update format is documented.
+- [x] Full commit/push/land skills remain deferred.
+- [x] New AI infrastructure skills remain deferred.
+- [x] `pnpm verify` passes if maintained docs are linted by the project.
+- [x] No Symphony runtime modules are implemented.
 
 ## Out Of Scope
 
 - Implementing commit/push/land skills.
+- Creating new project-local AI infrastructure skills.
 - Implementing Linear/Codex/runtime modules.
 - Adding CI or PR workflow automation unless needed only as documentation.
 - Rewriting all Trellis specs.
 
 ## Open Questions
 
-- Exact directory for AI docs/playbooks should be selected during implementation. Prefer a path that
-  future `/goal` prompts can load directly.
+None blocking planning. The implementation should still inspect `.agents/`, `.codex/`, `AGENTS.md`,
+and relevant Trellis specs before writing the final docs, but the planned maintained-docs location is
+`docs/ai/`.
+
+## Review Status
+
+Planning reviewed and approved on 2026-05-13. Proceed with docs-first implementation when the
+workflow state allows starting the task.
