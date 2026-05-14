@@ -59,7 +59,12 @@ Planned strict first-pass SPEC.md conformance, deferred dashboard/HTTP/SSH scope
 
 ### Main Changes
 
-(Add details)
+- Replaced the live Codex app-server boundary with JSON-RPC `initialize`, `thread/start` or
+  `thread/resume`, and `turn/start`.
+- Added protocol-shaped handling for `item/tool/call`, unsupported dynamic tools, user input
+  requests, approval requests, usage notifications, and rate-limit notifications.
+- Updated deterministic Codex fake tests to exercise the real JSON-RPC framing and current
+  generated-schema limitation that thread/turn start params do not expose a direct `tools` field.
 
 ### Git Commits
 
@@ -69,7 +74,13 @@ Planned strict first-pass SPEC.md conformance, deferred dashboard/HTTP/SSH scope
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `rtk proxy pnpm --filter symphony-ts test -- agent-runner`
+- [OK] `rtk proxy pnpm --filter symphony-ts typecheck`
+- [OK] `rtk proxy pnpm verify`
+- [OK] `rtk proxy pnpm --filter symphony-ts smoke:bin`
+- [OK] Real Linear `.env` GraphQL probe
+- [OK] Real local `codex app-server` JSON-RPC initialize probe
+- [OK] Controlled `symphony-ts` run with real Linear config and temporary JSON-RPC fake Codex
 
 ### Status
 
@@ -298,6 +309,39 @@ Implemented the first-pass TypeScript/Effect Symphony orchestration service, ver
 | Hash | Message |
 |------|---------|
 | `79d7a52bd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 10: Codex JSON-RPC environment acceptance
+
+**Date**: 2026-05-14
+**Task**: Codex JSON-RPC environment acceptance
+**Branch**: `main`
+
+### Summary
+
+Replaced the Codex app-server boundary with the installed JSON-RPC initialize/thread/turn protocol, added deterministic coverage for dynamic tools and no-stall requests, and verified real Linear/Codex environment acceptance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4132b7929` | (see git log) |
 
 ### Testing
 
