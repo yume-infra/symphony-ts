@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "selectedIssue": {
+    "id": "15c14a57-56e4-4e5e-83ed-247abee0432c",
+    "identifier": "SAY-5",
+    "title": "哈哈",
+    "priority": 0,
+    "createdAt": "2026-04-30T08:05:09.927Z",
+    "updatedAt": "2026-04-30T08:42:49.330Z",
+    "state": "Done"
+  },
+  "linear": {
+    "status": 200,
+    "viewer": {
+      "id": "69c23fe8-c5d0-416e-a375-4c6c8efb1509",
+      "name": "qwq sayori"
+    },
+    "candidateCount": 2,
+    "hasNextPage": false
+  },
+  "workflowPath": "/var/folders/w8/b0vdr9ld3dsg1dyb06ctbr6c0000gn/T/symphony-real-codex-9QbrIw/WORKFLOW.md",
+  "workspaceRoot": "/var/folders/w8/b0vdr9ld3dsg1dyb06ctbr6c0000gn/T/symphony-real-codex-9QbrIw/workspaces",
+  "tempBase": "symphony-real-codex-9QbrIw",
+  "waitTimeoutMs": 180000,
+  "completedWorkspace": "SAY-5",
+  "workspaceEntries": [
+    "SAY-5"
+  ],
+  "workspaceEvidence": [
+    {
+      "workspace": "SAY-5",
+      "realCodexLaunchMarker": "real_codex_app_server_pid=68794\n",
+      "afterRunMarker": "after_run_utc=\"2026-05-14T03:34:22Z\"\n",
+      "files": [
+        ".real-codex-app-server-launched",
+        ".symphony-after-run"
+      ]
+    }
+  ],
+  "processExit": {
+    "code": 130,
+    "signal": null
+  },
+  "hasSymphonyStart": true,
+  "protocolDeserializationFailed": false,
+  "pollTickFailed": false,
+  "userInputRequired": false,
+  "logTail": [
+    "level=info message=symphony_starting workflow_path=/var/folders/w8/b0vdr9ld3dsg1dyb06ctbr6c0000gn/T/symphony-real-codex-9QbrIw/WORKFLOW.md workspace_root=/var/folders/w8/b0vdr9ld3dsg1dyb06ctbr6c0000gn/T/symphony-real-codex-9QbrIw/workspaces"
+  ]
+}
