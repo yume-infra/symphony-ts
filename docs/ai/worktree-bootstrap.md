@@ -13,7 +13,7 @@ cd "$(git rev-parse --show-toplevel)"
 Current package layout:
 
 ```text
-apps/cli/  public symphony-ts CLI package
+apps/cli/  public @sayoriqwq/symphony-ts CLI package
 libs/      reserved for future runtime, domain, and testing packages
 ```
 
@@ -61,11 +61,11 @@ pnpm smoke:bin
 CLI package checks:
 
 ```bash
-pnpm --filter symphony-ts build
-pnpm --filter symphony-ts typecheck
-pnpm --filter symphony-ts typecheck:tsc
-pnpm --filter symphony-ts test
-pnpm --filter symphony-ts smoke:bin
+pnpm --filter @sayoriqwq/symphony-ts build
+pnpm --filter @sayoriqwq/symphony-ts typecheck
+pnpm --filter @sayoriqwq/symphony-ts typecheck:tsc
+pnpm --filter @sayoriqwq/symphony-ts test
+pnpm --filter @sayoriqwq/symphony-ts smoke:bin
 ```
 
 Use `pnpm smoke:bin` when CLI behavior, packaging, bin output, or the entrypoint changes.

@@ -1,0 +1,65 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: npm package version to publish, e.g. 0.1.0 or v0.1.0
+        required: true
+        type: string
+      npm_tag:
+        description: npm dist-tag
+        required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - next
+          - beta
+          - alpha
+      dry_run:
+        description: Run the publish command with --dry-run
+        required: true
+        default: false
+        type: boolean
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish @sayoriqwq/symphony-ts to npm
+    runs-on: ubuntu-latest
+    env:
+      NODE_VERSION: 22.22.1
+      PNPM_VERSION: 10.33.2
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org/
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare "pnpm@${PNPM_VERSION}" --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish:npm

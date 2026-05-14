@@ -5,7 +5,7 @@ TypeScript/Effect implementation of the Symphony orchestration service described
 The repository is a pnpm monorepo adapted from the local `create-yume` workspace shape:
 
 ```text
-apps/cli/  public `symphony-ts` CLI package
+apps/cli/  public `@sayoriqwq/symphony-ts` CLI package
 libs/      reserved for future runtime/domain/testing packages
 ```
 
@@ -25,10 +25,10 @@ declarations at `apps/cli/dist/index.d.ts`. The package exposes the `symphony-ts
 Common package-level checks:
 
 ```bash
-pnpm --filter symphony-ts build
-pnpm --filter symphony-ts typecheck
-pnpm --filter symphony-ts test
-pnpm --filter symphony-ts smoke:bin
+pnpm --filter @sayoriqwq/symphony-ts build
+pnpm --filter @sayoriqwq/symphony-ts typecheck
+pnpm --filter @sayoriqwq/symphony-ts test
+pnpm --filter @sayoriqwq/symphony-ts smoke:bin
 ```
 
 The CLI entrypoint uses the Effect v4 beta CLI module at `effect/unstable/cli`,

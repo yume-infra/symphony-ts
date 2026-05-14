@@ -30,9 +30,9 @@ pnpm verify
 For the CLI package:
 
 ```bash
-pnpm --filter symphony-ts typecheck
-pnpm --filter symphony-ts typecheck:tsc
-pnpm --filter symphony-ts test
+pnpm --filter @sayoriqwq/symphony-ts typecheck
+pnpm --filter @sayoriqwq/symphony-ts typecheck:tsc
+pnpm --filter @sayoriqwq/symphony-ts test
 ```
 
 In Codex CLI sessions using RTK, prefix commands with `rtk`.

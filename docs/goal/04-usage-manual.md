@@ -15,8 +15,8 @@
 
 ```bash
 rtk proxy pnpm verify
-rtk proxy pnpm --filter symphony-ts build
-rtk proxy pnpm --filter symphony-ts smoke:bin
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts build
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts smoke:bin
 ```
 
 ## 配置 Linear API key
@@ -92,7 +92,7 @@ Do not ask the user for review unless the issue explicitly requires human input.
 构建：
 
 ```bash
-rtk proxy pnpm --filter symphony-ts build
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts build
 ```
 
 启动：
@@ -239,10 +239,10 @@ rtk proxy pnpm verify
 只验证 CLI 包：
 
 ```bash
-rtk proxy pnpm --filter symphony-ts build
-rtk proxy pnpm --filter symphony-ts typecheck
-rtk proxy pnpm --filter symphony-ts test
-rtk proxy pnpm --filter symphony-ts smoke:bin
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts build
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts typecheck
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts test
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts smoke:bin
 ```
 
 ## 常见问题

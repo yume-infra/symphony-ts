@@ -61,7 +61,7 @@ parsing. The example shows the shape, not a runtime implementation.
 When CLI behavior changes, run:
 
 ```bash
-rtk pnpm --filter symphony-ts smoke:bin
+rtk pnpm --filter @sayoriqwq/symphony-ts smoke:bin
 rtk pnpm verify
 ```
 

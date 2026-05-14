@@ -43,7 +43,7 @@ Effect code, its answer must include this checklist before proposing implementat
 - Current v4 beta patterns: `effect/unstable/cli/Command`, `effect/unstable/cli/Flag`,
   `@effect/platform-node/NodeRuntime`, `@effect/platform-node/NodeServices`,
   `NodeRuntime.runMain`, and `Context.Service`.
-- Validation loop: use `tsgo` through `rtk proxy pnpm --filter symphony-ts typecheck`, or the full
+- Validation loop: use `tsgo` through `rtk proxy pnpm --filter @sayoriqwq/symphony-ts typecheck`, or the full
   `rtk proxy pnpm verify` gate.
 
 ## Product Shape
