@@ -90,11 +90,15 @@ export function runAttempt(
         const refreshed = yield* tracker.fetchIssueStatesByIds(params.config, [currentIssue.id])
         const refreshedIssue = refreshed[0]
 
-        if (refreshedIssue === undefined || !isActiveIssue(refreshedIssue, params.config)) {
+        if (refreshedIssue === undefined) {
           break
         }
 
         currentIssue = refreshedIssue
+
+        if (!isActiveIssue(refreshedIssue, params.config)) {
+          break
+        }
       }
 
       if (latestSession === null) {

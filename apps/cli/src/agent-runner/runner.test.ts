@@ -53,6 +53,7 @@ describe('agentRunner', () => {
 
       expect(result.workspace.path).toBe(join(root.path, 'SYM-1'))
       expect(result.session.sessionId).toBe('thread-1-turn-1')
+      expect(result.issue.state).toBe('Done')
       expect(codexRuns[0]).toMatchObject({
         cwd: join(root.path, 'SYM-1'),
         workspacePath: join(root.path, 'SYM-1'),

@@ -1,4 +1,5 @@
 import type { CodexAppServerClient } from '../agent-runner/codex.js'
+import type { AgentRunResult } from '../agent-runner/runner.js'
 import type { CodexError, ConfigError, PromptRenderError, TrackerError, WorkspaceError } from '../domain/errors.js'
 import type { Issue, ServiceConfig } from '../domain/types.js'
 import type { PromptRenderer } from '../prompt/render.js'
@@ -8,9 +9,12 @@ import { Effect } from 'effect'
 import { AgentRunner } from '../agent-runner/runner.js'
 import { ConfigResolver } from '../config/resolve.js'
 import { normalizeStateName } from '../domain/types.js'
+import { RuntimeLogger } from '../observability/logging.js'
 import { TrackerClient } from '../tracker/linear.js'
 import { WorkspaceManager, workspacePathFor } from '../workspace/manager.js'
 import { failureRetryDelayMs, isDispatchEligible, OrchestratorState, removeRunningForReconciliation, sortCandidates } from './state.js'
+
+type WorkerRunError = CodexError | PromptRenderError | TrackerError | WorkspaceError
 
 export interface PollTickOptions {
   readonly nowMs: number
@@ -38,6 +42,7 @@ export function pollTick(
   | PromptRenderer
   | CodexAppServerClient
   | LinearTransport
+  | RuntimeLogger
 > {
   return Effect.gen(function* () {
     const resolver = yield* ConfigResolver
@@ -65,11 +70,10 @@ export function pollTick(
 export function reconcileRunning(
   config: ServiceConfig,
   nowMs: number,
-): Effect.Effect<void, TrackerError, OrchestratorState | TrackerClient | WorkspaceManager | LinearTransport> {
+): Effect.Effect<void, TrackerError, OrchestratorState | TrackerClient | LinearTransport> {
   return Effect.gen(function* () {
     const stateService = yield* OrchestratorState
     const tracker = yield* TrackerClient
-    const workspace = yield* WorkspaceManager
     const state = yield* stateService.get
     let nextState = reconcileStalledRuns(state, config, nowMs)
     const runningIds = [...nextState.running.keys()]
@@ -96,8 +100,13 @@ export function reconcileRunning(
       }
 
       if (isTerminal(issue, config)) {
-        nextState = removeRunningForReconciliation(nextState, issue.id, true)
-        yield* workspace.removeForIssueBestEffort(issue.identifier, config.workspace, config.hooks)
+        nextState = {
+          ...nextState,
+          running: new Map(nextState.running).set(issue.id, {
+            ...running,
+            issue,
+          }),
+        }
         continue
       }
 
@@ -174,7 +183,7 @@ function processDueRetries(
 ): Effect.Effect<
   void,
   PollTickError,
-  OrchestratorState | TrackerClient | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | LinearTransport
+  OrchestratorState | TrackerClient | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | LinearTransport | RuntimeLogger
 > {
   return Effect.gen(function* () {
     const state = yield* OrchestratorState
@@ -226,11 +235,12 @@ function dispatchIssue(
 ): Effect.Effect<
   void,
   PollTickError,
-  OrchestratorState | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | TrackerClient | LinearTransport
+  OrchestratorState | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | TrackerClient | LinearTransport | RuntimeLogger
 > {
   return Effect.gen(function* () {
     const state = yield* OrchestratorState
     const runner = yield* AgentRunner
+    const logger = yield* RuntimeLogger
     const marked = yield* state.tryMarkRunning(
       issue,
       config,
@@ -247,12 +257,33 @@ function dispatchIssue(
       issue,
       attempt,
       config,
-      onCodexEvent: event => state.recordCodexEvent(issue.id, event),
+      onCodexEvent: event =>
+        state.recordCodexEvent(issue.id, event).pipe(
+          Effect.andThen(logger.info('codex_event', {
+            issue_id: issue.id,
+            issue_identifier: issue.identifier,
+            session_id: event.sessionId ?? undefined,
+            codex_event: event.event,
+            codex_app_server_pid: event.codexAppServerPid,
+            codex_message: event.message,
+            codex_input_tokens: event.usage?.inputTokens,
+            codex_output_tokens: event.usage?.outputTokens,
+            codex_total_tokens: event.usage?.totalTokens,
+          })),
+        ),
     }).pipe(
-      Effect.exit,
-      Effect.flatMap(exit => handleWorkerExitEffect(issue, exit._tag === 'Success'
-        ? { _tag: 'normal' }
-        : { _tag: 'failed', error: 'worker failed' }, config, options.nowMs)),
+      Effect.matchEffect({
+        onFailure: error =>
+          logger.warn('worker_failed', workerFailureContext(issue, error)).pipe(
+            Effect.andThen(handleWorkerExitEffect(
+              issue,
+              { _tag: 'failed', error: describeWorkerError(error) },
+              config,
+              options.nowMs,
+            )),
+          ),
+        onSuccess: result => handleWorkerSuccessEffect(result, config, options.nowMs),
+      }),
     )
 
     if (options.launchMode === 'inline') {
@@ -262,6 +293,32 @@ function dispatchIssue(
 
     yield* Effect.forkChild(worker, { startImmediately: true })
   })
+}
+
+function handleWorkerSuccessEffect(
+  result: AgentRunResult,
+  config: ServiceConfig,
+  nowMs: number,
+): Effect.Effect<void, never, OrchestratorState | WorkspaceManager> {
+  if (isTerminal(result.issue, config)) {
+    return Effect.gen(function* () {
+      const state = yield* OrchestratorState
+      const workspace = yield* WorkspaceManager
+      const current = yield* state.get
+      yield* state.set(removeRunningForReconciliation(current, result.issue.id, true))
+      yield* workspace.removeForIssueBestEffort(result.issue.identifier, config.workspace, config.hooks)
+    })
+  }
+
+  if (!isActive(result.issue, config)) {
+    return Effect.gen(function* () {
+      const state = yield* OrchestratorState
+      const current = yield* state.get
+      yield* state.set(removeRunningForReconciliation(current, result.issue.id, false))
+    })
+  }
+
+  return handleWorkerExitEffect(result.issue, { _tag: 'normal' }, config, nowMs)
 }
 
 function handleWorkerExitEffect(
@@ -287,4 +344,18 @@ function isTerminal(issue: Issue, config: ServiceConfig): boolean {
   const normalized = normalizeStateName(issue.state)
 
   return config.tracker.terminalStates.some(state => normalizeStateName(state) === normalized)
+}
+
+function workerFailureContext(issue: Issue, error: WorkerRunError) {
+  return {
+    issue_id: issue.id,
+    issue_identifier: issue.identifier,
+    error_code: error.code,
+    reason: error.reason,
+    session_id: 'sessionId' in error ? error.sessionId : undefined,
+  }
+}
+
+function describeWorkerError(error: WorkerRunError): string {
+  return `${error.code}: ${error.reason}`
 }

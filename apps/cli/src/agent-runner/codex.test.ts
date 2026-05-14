@@ -249,6 +249,48 @@ describe('codex app-server boundary', () => {
     })
   })
 
+  it('auto-approves MCP elicitation requests so trusted connector tools can run unattended', async () => {
+    const script = createFakeCodexAppServerScript([
+      initializeOk(),
+      threadOk(),
+      turnStartOk(),
+      {
+        id: 'approval-1',
+        method: 'mcpServer/elicitation/request',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          serverName: 'codex_apps',
+          mode: 'form',
+          message: 'Allow Linear to run tool "linear_save_issue"?',
+          requestedSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
+      },
+      turnCompleted(),
+    ])
+    const events: Array<string> = []
+
+    await runEffect(runCodexScriptTurn(script, {
+      ...baseParams,
+      onEvent: event => Effect.sync(() => {
+        events.push(event.event)
+      }),
+    }), { layer: fakeLinear([]).layer })
+
+    expect(recordAt(script.sentMessages, 3)).toMatchObject({
+      id: 'approval-1',
+      result: {
+        action: 'accept',
+        content: {},
+      },
+    })
+    expect(events).toContain('approval_granted')
+    expect(events).not.toContain('approval_rejected')
+  })
+
   it('returns protocol-shaped failures for unsupported dynamic tools and continues', async () => {
     const script = createFakeCodexAppServerScript([
       initializeOk(),

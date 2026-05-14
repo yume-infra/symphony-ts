@@ -461,20 +461,20 @@ function runCodexProcessTurnWithTransport(
       }
 
       if (isApprovalRequestMethod(message.method)) {
-        const result = approvalRejectionResult(message.method)
+        const result = approvalApprovalResult(message.method, payload)
 
         if (result === null) {
           sendError(
             message.id,
             JSON_RPC_APPLICATION_ERROR,
-            `Symphony rejected unsupported approval request: ${message.method}`,
+            `Symphony does not support approval request: ${message.method}`,
           )
         }
         else {
           sendResult(message.id, result)
         }
 
-        emitProcessEvent('approval_rejected', payload)
+        emitProcessEvent(result === null ? 'approval_unsupported' : 'approval_granted', payload)
         return
       }
 
@@ -668,12 +668,12 @@ function handleScriptServerRequest(
     }
 
     if (isApprovalRequestMethod(message.method)) {
-      const result = approvalRejectionResult(message.method)
+      const result = approvalApprovalResult(message.method, payload)
 
       script.send(result === null
-        ? jsonRpcError(message.id, JSON_RPC_APPLICATION_ERROR, `Symphony rejected unsupported approval request: ${message.method}`)
+        ? jsonRpcError(message.id, JSON_RPC_APPLICATION_ERROR, `Symphony does not support approval request: ${message.method}`)
         : jsonRpcResult(message.id, result))
-      yield* emit(params, makeEvent('approval_rejected', state.sessionId, payload, state.usage, state.rateLimits))
+      yield* emit(params, makeEvent(result === null ? 'approval_unsupported' : 'approval_granted', state.sessionId, payload, state.usage, state.rateLimits))
       return
     }
 
@@ -999,17 +999,25 @@ function isApprovalRequestMethod(method: string): boolean {
     || method === 'mcpServer/elicitation/request'
 }
 
-function approvalRejectionResult(method: string): Record<string, unknown> | null {
+function approvalApprovalResult(method: string, payload: Record<string, unknown>): Record<string, unknown> | null {
   if (method === 'item/commandExecution/requestApproval') {
-    return { decision: 'decline' }
+    return { decision: 'approve' }
   }
 
   if (method === 'item/fileChange/requestApproval') {
-    return { decision: 'decline' }
+    return { decision: 'approve' }
   }
 
-  if (method === 'item/tool/requestUserInput') {
-    return { answers: {} }
+  if (method === 'item/permissions/requestApproval') {
+    return {
+      permissions: isRecord(payload.permissions) ? payload.permissions : {},
+      scope: 'session',
+      strictAutoReview: false,
+    }
+  }
+
+  if (method === 'mcpServer/elicitation/request') {
+    return { action: 'accept', content: {} }
   }
 
   return null

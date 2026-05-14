@@ -7,6 +7,7 @@ import { runEffect } from '../../tests/support/effect.js'
 import { CodexAppServerClient } from '../agent-runner/codex.js'
 import { AgentRunner } from '../agent-runner/runner.js'
 import { ConfigResolverLive } from '../config/resolve.js'
+import { RuntimeLogger } from '../observability/logging.js'
 import { PromptRenderer } from '../prompt/render.js'
 import { LinearTransport, TrackerClient } from '../tracker/linear.js'
 import { WorkspaceManager } from '../workspace/manager.js'
@@ -36,6 +37,7 @@ describe('orchestrator runtime', () => {
         fakeCodex(),
         fakeWorkspace(),
         fakeLinear(),
+        fakeLogger(),
       ),
     })
 
@@ -47,7 +49,36 @@ describe('orchestrator runtime', () => {
     })
   })
 
-  it('reconciles terminal running issues and cleans their workspace', async () => {
+  it('cleans the workspace and does not retry when a worker returns a terminal issue', async () => {
+    const removed: Array<string> = []
+    const snapshot = await runEffect(Effect.gen(function* () {
+      yield* pollTick(config, { nowMs: 1000, launchMode: 'inline' })
+      const state = yield* OrchestratorState
+
+      return yield* state.snapshot(config, 2000)
+    }), {
+      layer: Layer.mergeAll(
+        ConfigResolverLive,
+        OrchestratorStateLive,
+        fakeTracker({
+          candidates: [issue()],
+          refreshes: [],
+        }),
+        fakeRunner([], { issue: { ...issue(), state: 'Done' } }),
+        fakePromptRenderer(),
+        fakeCodex(),
+        fakeWorkspace(removed),
+        fakeLinear(),
+        fakeLogger(),
+      ),
+    })
+
+    expect(snapshot.running).toEqual([])
+    expect(snapshot.retrying).toEqual([])
+    expect(removed).toEqual(['SYM-1'])
+  })
+
+  it('keeps terminal running issues until the worker exits so after_run can fire before cleanup', async () => {
     const removed: Array<string> = []
     const snapshot = await runEffect(Effect.gen(function* () {
       const state = yield* OrchestratorState
@@ -64,11 +95,17 @@ describe('orchestrator runtime', () => {
         }),
         fakeWorkspace(removed),
         fakeLinear(),
+        fakeLogger(),
       ),
     })
 
-    expect(snapshot.running).toEqual([])
-    expect(removed).toEqual(['SYM-1'])
+    expect(snapshot.running).toHaveLength(1)
+    expect(snapshot.running[0]).toMatchObject({
+      issue: {
+        state: 'Done',
+      },
+    })
+    expect(removed).toEqual([])
   })
 
   it('detects stalled workers and schedules retry', () => {
@@ -129,7 +166,10 @@ describe('orchestrator runtime', () => {
   })
 })
 
-function fakeRunner(calls: Array<AgentRunParams>): Layer.Layer<AgentRunner> {
+function fakeRunner(
+  calls: Array<AgentRunParams>,
+  resultOverrides: Partial<AgentRunResult> = {},
+): Layer.Layer<AgentRunner> {
   return Layer.succeed(AgentRunner)({
     runAttempt: params =>
       Effect.sync((): AgentRunResult => {
@@ -155,6 +195,7 @@ function fakeRunner(calls: Array<AgentRunParams>): Layer.Layer<AgentRunner> {
             rateLimits: null,
           },
           turns: 1,
+          ...resultOverrides,
         }
       }),
   })
@@ -209,5 +250,16 @@ function workspace(identifier: string): Workspace {
 function fakeLinear(): Layer.Layer<LinearTransport> {
   return Layer.succeed(LinearTransport)({
     execute: () => Effect.die(new Error('linear transport should not be called by orchestrator runtime tests')),
+  })
+}
+
+function fakeLogger(): Layer.Layer<RuntimeLogger> {
+  const noop = () => Effect.void
+
+  return Layer.succeed(RuntimeLogger)({
+    log: noop,
+    info: noop,
+    warn: noop,
+    error: noop,
   })
 }

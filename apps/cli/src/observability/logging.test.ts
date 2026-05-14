@@ -8,8 +8,9 @@ describe('formatStructuredLog', () => {
       issue_identifier: 'SYM-1',
       session_id: 'thread-1-turn-1',
       api_key: 'secret',
+      codex_total_tokens: 12,
     })).toBe(
-      'level=info message=dispatch_started issue_id=issue-1 issue_identifier=SYM-1 session_id=thread-1-turn-1 api_key=[redacted]',
+      'level=info message=dispatch_started issue_id=issue-1 issue_identifier=SYM-1 session_id=thread-1-turn-1 api_key=[redacted] codex_total_tokens=12',
     )
   })
 })

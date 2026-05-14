@@ -69,6 +69,10 @@ function redactIfSecret(
     return null
   }
 
+  if (typeof value === 'number') {
+    return value
+  }
+
   if (/token|secret|api_key|authorization/i.test(key)) {
     return '[redacted]'
   }

@@ -1,0 +1,4 @@
+{"hook":"after_create","cwd":"/Users/sayori/Desktop/symphony-ts/.trellis/workspace/sayoriqwq/normal-flow-2026-05-14-say-7/workspaces/SAY-7","ts":"2026-05-14T06:46:28Z"}
+{"hook":"before_run","cwd":"/Users/sayori/Desktop/symphony-ts/.trellis/workspace/sayoriqwq/normal-flow-2026-05-14-say-7/workspaces/SAY-7","ts":"2026-05-14T06:46:28Z"}
+{"hook":"after_run","cwd":"/Users/sayori/Desktop/symphony-ts/.trellis/workspace/sayoriqwq/normal-flow-2026-05-14-say-7/workspaces/SAY-7","ts":"2026-05-14T06:47:21Z","acceptance_file":true}
+{"hook":"before_remove","cwd":"/Users/sayori/Desktop/symphony-ts/.trellis/workspace/sayoriqwq/normal-flow-2026-05-14-say-7/workspaces/SAY-7","ts":"2026-05-14T06:47:21Z","acceptance_file":true}
