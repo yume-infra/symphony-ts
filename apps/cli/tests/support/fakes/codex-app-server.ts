@@ -1,7 +1,4 @@
-export interface FakeCodexProtocolMessage {
-  readonly event: string
-  readonly payload?: unknown
-}
+export type FakeCodexProtocolMessage = unknown
 
 export interface FakeCodexAppServerScript {
   readonly sentMessages: ReadonlyArray<unknown>

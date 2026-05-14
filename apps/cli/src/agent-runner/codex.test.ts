@@ -74,12 +74,36 @@ const baseParams: CodexRunParams = {
 }
 
 describe('codex app-server boundary', () => {
-  it('extracts thread and turn identities, usage, rate limits, and emitted events', async () => {
+  it('starts a JSON-RPC thread and turn, then extracts identities, usage, rate limits, and events', async () => {
     const script = createFakeCodexAppServerScript([
-      { event: 'session_started', payload: { thread_id: 'thread-1', turn_id: 'turn-1', pid: '123' } },
-      { event: 'thread/tokenUsage/updated', payload: { total_token_usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } },
-      { event: 'rate_limits', payload: { primary: { remaining: 1 } } },
-      { event: 'turn_completed', payload: { thread_id: 'thread-1', turn_id: 'turn-1' } },
+      initializeOk(),
+      threadOk(),
+      turnStartOk(),
+      {
+        method: 'thread/tokenUsage/updated',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          tokenUsage: {
+            total: {
+              inputTokens: 10,
+              outputTokens: 5,
+              totalTokens: 15,
+            },
+          },
+        },
+      },
+      {
+        method: 'account/rateLimits/updated',
+        params: {
+          rateLimits: {
+            primary: {
+              remaining: 1,
+            },
+          },
+        },
+      },
+      turnCompleted(),
     ])
     const events: Array<string> = []
     const result = await runEffect(runCodexScriptTurn(script, {
@@ -107,14 +131,78 @@ describe('codex app-server boundary', () => {
     expect(events).toEqual([
       'session_started',
       'thread/tokenUsage/updated',
-      'rate_limits',
-      'turn_completed',
+      'account/rateLimits/updated',
+      'turn/completed',
     ])
-    expect(script.sentMessages[0]).toMatchObject({
-      type: 'turn_start',
-      cwd: '/tmp/symphony/SYM-1',
-      prompt: 'Prompt',
-      tools: ['linear_graphql'],
+    expect(recordAt(script.sentMessages, 0)).toMatchObject({
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: {
+          name: 'symphony-ts',
+          version: '0.0.0',
+        },
+        capabilities: {
+          experimentalApi: true,
+        },
+      },
+    })
+    expect(recordAt(script.sentMessages, 1)).toMatchObject({
+      id: 2,
+      method: 'thread/start',
+      params: {
+        cwd: '/tmp/symphony/SYM-1',
+        approvalPolicy: 'never',
+        sandbox: 'workspace-write',
+        serviceName: 'symphony-ts',
+      },
+    })
+    expect(recordAt(script.sentMessages, 1).params).not.toHaveProperty('tools')
+    expect(recordAt(script.sentMessages, 2)).toMatchObject({
+      id: 3,
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-1',
+        cwd: '/tmp/symphony/SYM-1',
+        approvalPolicy: 'never',
+        input: [
+          {
+            type: 'text',
+            text: 'Prompt',
+            text_elements: [],
+          },
+        ],
+      },
+    })
+    expect(recordAt(script.sentMessages, 2).params).not.toHaveProperty('tools')
+  })
+
+  it('resumes an existing thread before starting the next turn', async () => {
+    const script = createFakeCodexAppServerScript([
+      initializeOk(),
+      threadOk(2, 'thread-existing'),
+      turnStartOk(3, 'thread-existing', 'turn-2'),
+      turnCompleted('thread-existing', 'turn-2'),
+    ])
+
+    const result = await runEffect(runCodexScriptTurn(script, {
+      ...baseParams,
+      threadId: 'thread-existing',
+      turnNumber: 2,
+    }), { layer: fakeLinear([]).layer })
+
+    expect(result).toMatchObject({
+      sessionId: 'thread-existing-turn-2',
+      threadId: 'thread-existing',
+      turnId: 'turn-2',
+      turnCount: 2,
+    })
+    expect(recordAt(script.sentMessages, 1)).toMatchObject({
+      method: 'thread/resume',
+      params: {
+        threadId: 'thread-existing',
+        cwd: '/tmp/symphony/SYM-1',
+      },
     })
   })
 
@@ -130,10 +218,20 @@ describe('codex app-server boundary', () => {
     })
   })
 
-  it('fails user-input-required events instead of stalling', async () => {
+  it('fails user-input server requests instead of stalling', async () => {
     const script = createFakeCodexAppServerScript([
-      { event: 'session_started', payload: { thread_id: 'thread-1', turn_id: 'turn-1' } },
-      { event: 'turn_input_required', payload: { message: 'Need approval' } },
+      initializeOk(),
+      threadOk(),
+      turnStartOk(),
+      {
+        id: 'input-1',
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          message: 'Need operator input',
+        },
+      },
     ])
     const error = await runEffect(Effect.flip(runCodexScriptTurn(script, baseParams)), {
       layer: fakeLinear([]).layer,
@@ -143,34 +241,66 @@ describe('codex app-server boundary', () => {
       code: 'turn_input_required',
       sessionId: 'thread-1-turn-1',
     })
-  })
-
-  it('returns structured failures for unsupported dynamic tools and continues', async () => {
-    const script = createFakeCodexAppServerScript([
-      { event: 'session_started', payload: { thread_id: 'thread-1', turn_id: 'turn-1' } },
-      { event: 'tool_call', payload: { name: 'unknown_tool', input: {} } },
-      { event: 'turn_completed', payload: { thread_id: 'thread-1', turn_id: 'turn-1' } },
-    ])
-
-    await runEffect(runCodexScriptTurn(script, baseParams), { layer: fakeLinear([]).layer })
-
-    expect(script.sentMessages[1]).toMatchObject({
-      type: 'tool_result',
-      name: 'unknown_tool',
-      result: {
-        success: false,
-        error: {
-          code: 'unsupported_tool_call',
-        },
+    expect(recordAt(script.sentMessages, 3)).toMatchObject({
+      id: 'input-1',
+      error: {
+        code: -32000,
       },
     })
   })
 
+  it('returns protocol-shaped failures for unsupported dynamic tools and continues', async () => {
+    const script = createFakeCodexAppServerScript([
+      initializeOk(),
+      threadOk(),
+      turnStartOk(),
+      {
+        id: 'tool-1',
+        method: 'item/tool/call',
+        params: {
+          tool: 'unknown_tool',
+          arguments: {},
+          callId: 'call-1',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+        },
+      },
+      turnCompleted(),
+    ])
+
+    await runEffect(runCodexScriptTurn(script, baseParams), { layer: fakeLinear([]).layer })
+
+    expect(recordAt(script.sentMessages, 3)).toMatchObject({
+      id: 'tool-1',
+      result: {
+        success: false,
+        contentItems: [
+          {
+            type: 'inputText',
+          },
+        ],
+      },
+    })
+    expect(dynamicToolText(script.sentMessages[3])).toContain('unsupported_tool_call')
+  })
+
   it('routes linear_graphql tool calls through configured Linear auth', async () => {
     const script = createFakeCodexAppServerScript([
-      { event: 'session_started', payload: { thread_id: 'thread-1', turn_id: 'turn-1' } },
-      { event: 'tool_call', payload: { name: 'linear_graphql', input: { query: 'query Viewer { viewer { id } }' } } },
-      { event: 'turn_completed', payload: { thread_id: 'thread-1', turn_id: 'turn-1' } },
+      initializeOk(),
+      threadOk(),
+      turnStartOk(),
+      {
+        id: 'tool-1',
+        method: 'item/tool/call',
+        params: {
+          tool: 'linear_graphql',
+          arguments: { query: 'query Viewer { viewer { id } }' },
+          callId: 'call-1',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+        },
+      },
+      turnCompleted(),
     ])
     const fake = fakeLinear([{ status: 200, body: { data: { viewer: { id: 'me' } } } }])
 
@@ -181,15 +311,73 @@ describe('codex app-server boundary', () => {
       endpoint: 'https://linear.example/graphql',
       apiKey: 'linear-secret',
     })
-    expect(script.sentMessages[1]).toMatchObject({
-      type: 'tool_result',
-      name: 'linear_graphql',
+    expect(recordAt(script.sentMessages, 3)).toMatchObject({
+      id: 'tool-1',
       result: {
         success: true,
       },
     })
+    expect(JSON.parse(dynamicToolText(script.sentMessages[3]))).toMatchObject({
+      success: true,
+      body: {
+        data: {
+          viewer: {
+            id: 'me',
+          },
+        },
+      },
+    })
   })
 })
+
+function initializeOk(id = 1): Record<string, unknown> {
+  return {
+    id,
+    result: {
+      userAgent: 'symphony-ts/0.0.0',
+      codexHome: '/Users/example/.codex',
+      platformFamily: 'unix',
+      platformOs: 'macos',
+    },
+  }
+}
+
+function threadOk(id = 2, threadId = 'thread-1'): Record<string, unknown> {
+  return {
+    id,
+    result: {
+      thread: {
+        id: threadId,
+      },
+    },
+  }
+}
+
+function turnStartOk(id = 3, threadId = 'thread-1', turnId = 'turn-1'): Record<string, unknown> {
+  return {
+    id,
+    result: {
+      turn: {
+        id: turnId,
+        status: 'inProgress',
+      },
+      threadId,
+    },
+  }
+}
+
+function turnCompleted(threadId = 'thread-1', turnId = 'turn-1'): Record<string, unknown> {
+  return {
+    method: 'turn/completed',
+    params: {
+      threadId,
+      turn: {
+        id: turnId,
+        status: 'completed',
+      },
+    },
+  }
+}
 
 function fakeLinear(responses: ReadonlyArray<LinearGraphQLResponse>): {
   readonly requests: Array<LinearGraphQLRequest>
@@ -215,4 +403,35 @@ function fakeLinear(responses: ReadonlyArray<LinearGraphQLResponse>): {
         }),
     }),
   }
+}
+
+function dynamicToolText(message: unknown): string {
+  const result = recordAt([recordAt([message], 0).result], 0)
+  const items = result.contentItems
+
+  if (!Array.isArray(items)) {
+    throw new TypeError('dynamic tool response did not include contentItems')
+  }
+
+  const first = items[0]
+
+  if (!isRecord(first) || typeof first.text !== 'string') {
+    throw new TypeError('dynamic tool response did not include text')
+  }
+
+  return first.text
+}
+
+function recordAt(values: ReadonlyArray<unknown>, index: number): Record<string, unknown> {
+  const value = values[index]
+
+  if (!isRecord(value)) {
+    throw new TypeError(`expected record at index ${index}`)
+  }
+
+  return value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
