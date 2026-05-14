@@ -59,7 +59,13 @@ Planned strict first-pass SPEC.md conformance, deferred dashboard/HTTP/SSH scope
 
 ### Main Changes
 
-(Add details)
+- Built the CLI and ran a temporary real-integration workflow against Linear project
+  `symphony-test-8e28f62fb2e9`.
+- Dispatched real Linear issue `SAY-5` into a disposable workspace through `symphony-ts`.
+- Executed the real local `codex app-server` command for one minimal turn and recorded evidence in
+  the archived task directory.
+- Captured explicit evidence for the real Codex launch marker, `after_run` completion marker,
+  workspace creation, and no protocol/poll/user-input failures.
 
 ### Git Commits
 
@@ -69,7 +75,11 @@ Planned strict first-pass SPEC.md conformance, deferred dashboard/HTTP/SSH scope
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] `rtk proxy pnpm --filter symphony-ts build`
+- [OK] Real Linear GraphQL selection returned issue `SAY-5`
+- [OK] Real `symphony-ts` dispatch wrote `.real-codex-app-server-launched`
+- [OK] Real turn completion reached `.symphony-after-run`
+- [OK] Evidence audit passed in `acceptance-audit.md`
 
 ### Status
 
@@ -346,6 +356,39 @@ Replaced the Codex app-server boundary with the installed JSON-RPC initialize/th
 - [OK] Real Linear `.env` GraphQL probe
 - [OK] Real local `codex app-server` JSON-RPC initialize probe
 - [OK] Controlled `symphony-ts` run with real Linear config and temporary JSON-RPC fake Codex
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 11: Real Codex turn dispatch acceptance
+
+**Date**: 2026-05-14
+**Task**: Real Codex turn dispatch acceptance
+**Branch**: `main`
+
+### Summary
+
+Ran a real Linear-to-symphony-ts-to-local-codex-app-server dispatch using issue SAY-5, completed one real Codex turn, and recorded auditable evidence for launch, workspace, after_run completion, and absence of protocol/poll/user-input failures.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4e61419f0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
 
 ### Status
 
