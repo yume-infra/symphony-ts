@@ -30,8 +30,13 @@ The CLI should not:
 
 ## Dependencies
 
-Use `@effect/cli`. Do not introduce Commander, Yargs, oclif, cac, or interactive prompt tooling
-unless the user explicitly approves it.
+Use the Effect v4 beta CLI modules from `effect/unstable/cli`, such as
+`effect/unstable/cli/Command`, `effect/unstable/cli/Argument`, and
+`effect/unstable/cli/Flag` when needed.
+
+Do not reintroduce `@effect/cli`; its latest package peers on Effect v3. Do not
+introduce Commander, Yargs, oclif, cac, or interactive prompt tooling unless the
+user explicitly approves it.
 
 ## Shutdown
 

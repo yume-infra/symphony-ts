@@ -6,6 +6,9 @@
   "typescript.preferences.autoImportFileExcludePatterns": [
     "**/repos/**"
   ],
+  "javascript.preferences.autoImportFileExcludePatterns": [
+    "**/repos/**"
+  ],
   "files.watcherExclude": {
     "**/repos/**": true
   },

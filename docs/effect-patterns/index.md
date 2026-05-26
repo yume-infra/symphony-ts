@@ -9,6 +9,25 @@ It is a squashed subtree from `Effect-TS/effect-smol`, the repository published
 in the `effect@4.0.0-beta.66` package metadata. The selected upstream commit is
 `b559d68845f848a10153395778f035682d399075`.
 
+## Pinned Source Maintenance
+
+The pinned source follows the official Effect LLM workflow: keep the real
+upstream source in-repo as a squashed subtree so agents can inspect it without
+depending on `node_modules` or a separate clone.
+
+Update it only as a deliberate infrastructure task:
+
+```bash
+git subtree pull \
+  --prefix=repos/effect \
+  https://github.com/Effect-TS/effect-smol.git \
+  main \
+  --squash
+```
+
+After updating, record the new `git-subtree-split` commit in this file and run
+the `tsgo` validation loop before changing runtime code.
+
 ## Version Baseline
 
 - `effect@4.0.0-beta.66`

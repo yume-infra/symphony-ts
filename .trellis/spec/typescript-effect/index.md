@@ -42,6 +42,6 @@ Do not hand the main runtime implementation to `/goal` until the repository has:
 | --- | --- |
 | [Project Structure](./project-structure.md) | Expected source module boundaries. |
 | [Effect Patterns](./effect-patterns.md) | Services, layers, concurrency, resources. |
-| [CLI Patterns](./cli-patterns.md) | Minimal `@effect/cli` entrypoint. |
+| [CLI Patterns](./cli-patterns.md) | Minimal Effect v4 beta CLI entrypoint. |
 | [Error And Resource Model](./error-resource-model.md) | Typed errors and resource safety. |
 | [tsgo And LLM Workflow](./tsgo-and-llm-workflow.md) | Diagnostics and agent coding flow. |
