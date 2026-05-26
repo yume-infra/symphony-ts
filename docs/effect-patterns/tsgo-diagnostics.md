@@ -42,11 +42,13 @@ surface.
 ## Agent Loop
 
 1. Read the relevant pattern doc.
-2. Check source examples under `repos/effect/` only when needed.
-3. Implement the narrow runtime slice.
-4. Run `rtk pnpm typecheck`.
-5. Use diagnostics to fix Effect API and floating Effect issues.
-6. Run task-specific tests and `rtk pnpm verify`.
+2. Read `repos/effect/LLMS.md` before non-trivial Effect work.
+3. Check source examples under `repos/effect/` only when needed.
+4. Run `pnpm effect:source:verify` if the subtree, docs, or package baseline changed.
+5. Implement the narrow runtime slice.
+6. Run `rtk pnpm typecheck`.
+7. Use diagnostics to fix Effect API and floating Effect issues.
+8. Run task-specific tests and `rtk pnpm verify`.
 
 ## References
 

@@ -36,6 +36,8 @@ Effect code, its answer must include this checklist before proposing implementat
 - Code-spec entry: `.trellis/spec/typescript-effect/index.md`.
 - Upstream source reference: `repos/effect/`, a read-only squashed subtree from
   `Effect-TS/effect-smol`.
+- Upstream LLM source guide: `repos/effect/LLMS.md`.
+- Source pin authority: `repos/effect.pin.json`; verify with `pnpm effect:source:verify`.
 - Package authority: `package.json` and `pnpm-lock.yaml`.
 - Active baseline: `effect@4.0.0-beta.66` and `@effect/platform-node@4.0.0-beta.66`.
 - Import boundary: application and tests import from installed dependencies only; never import from
@@ -75,6 +77,8 @@ Effect code, its answer must include this checklist before proposing implementat
   coding:
   - `docs/effect-patterns/index.md` is the first local Effect pattern index.
   - `repos/effect/` is the only vendored upstream Effect source path.
+  - `repos/effect/LLMS.md` is the upstream Effect v4 LLM guide from the pinned source.
+  - `repos/effect.pin.json` records the expected subtree repository, branch, and split.
   - `.trellis/spec/typescript-effect/index.md` is the Trellis code-spec entry for Effect work.
   - `package.json` plus `pnpm-lock.yaml` are the package-version authority.
 - The active Effect dependency baseline is Effect v4 beta. Treat `effect@4.0.0-beta.66` and
@@ -84,11 +88,12 @@ Effect code, its answer must include this checklist before proposing implementat
   This project intentionally chooses the aggressive path here: prefer the testing-stage tsgo-based
   Effect LSP experience over the conservative standalone `@effect/language-service` setup.
 - Follow Effect's official LLM coding baseline: use `llms.txt` / `llms-full.txt` and topic docs as
-  navigation, but prefer a tight feedback loop with tsgo diagnostics plus local source/reference
-  material over guessing APIs from memory.
+  navigation, read `repos/effect/LLMS.md` before non-trivial Effect work, and prefer a tight
+  feedback loop with tsgo diagnostics plus local source/reference material over guessing APIs from
+  memory.
 - Effect best-practice source order is: current package versions in `package.json` and
-  `pnpm-lock.yaml`, relevant Effect official docs, local vendored/reference Effect source under
-  `repos/effect`, tsgo diagnostics, then
+  `pnpm-lock.yaml`, relevant Effect official docs, `repos/effect/LLMS.md`, local
+  vendored/reference Effect source under `repos/effect`, tsgo diagnostics, then
   project-local Trellis specs and AGENTS decisions.
 - `effect.website/docs/code-style/guidelines/` is the minimum style floor: run long-lived Node
   programs with `NodeRuntime.runMain` and avoid tacit / point-free Effect calls when explicit
@@ -97,6 +102,9 @@ Effect code, its answer must include this checklist before proposing implementat
   `Effect-TS/effect-smol`. Use it for source, tests, examples, and API design reference only. Do
   not edit vendored files unless explicitly asked, and never import from `repos/effect` in
   application or test code.
+- Keep the subtree pin executable: `repos/effect.pin.json` is the manifest,
+  `pnpm effect:source:verify` checks it, and `pnpm effect:source:update` is the deliberate
+  `git subtree pull --squash` update path.
 - Effect v4 beta implementation must use dependency imports, not vendored paths:
   - CLI: `effect/unstable/cli/Command` and `effect/unstable/cli/Flag`
   - Node runtime: `@effect/platform-node/NodeRuntime`

@@ -14,6 +14,8 @@
     "deps:check": "taze -r",
     "deps:check:all": "taze -r --all",
     "deps:fresh": "taze minor -r -w -i --maturity-period 7",
+    "effect:source:update": "node scripts/effect-source-pin.mjs update",
+    "effect:source:verify": "node scripts/effect-source-pin.mjs verify",
     "husky:install": "husky",
     "knip": "knip",
     "lint": "eslint",
@@ -26,7 +28,7 @@
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "typecheck:tsc": "turbo run typecheck:tsc",
-    "verify": "pnpm build && pnpm typecheck && pnpm test && pnpm lint && pnpm knip"
+    "verify": "pnpm effect:source:verify && pnpm build && pnpm typecheck && pnpm test && pnpm lint && pnpm knip"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",

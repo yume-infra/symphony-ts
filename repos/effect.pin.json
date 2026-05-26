@@ -1,0 +1,14 @@
+{
+  "name": "effect",
+  "repository": "https://github.com/Effect-TS/effect-smol.git",
+  "branch": "main",
+  "prefix": "repos/effect",
+  "split": "b559d68845f848a10153395778f035682d399075",
+  "llmDocument": "repos/effect/LLMS.md",
+  "packageBaseline": {
+    "effect": "4.0.0-beta.66",
+    "@effect/platform-node": "4.0.0-beta.66",
+    "@effect/tsgo": "0.7.0",
+    "@typescript/native-preview": "7.0.0-dev.20260513.1"
+  }
+}

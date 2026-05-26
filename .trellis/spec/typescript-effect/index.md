@@ -12,8 +12,11 @@ Read this layer before writing TypeScript runtime code.
 - [ ] Confirm the active Effect baseline in `pnpm-lock.yaml`: `effect@4.0.0-beta.66` and
       `@effect/platform-node@4.0.0-beta.66` unless package metadata says otherwise.
 - [ ] Confirm `repos/effect/` exists as the only vendored upstream Effect source path.
+- [ ] Run or trust the latest passing `pnpm effect:source:verify` before relying on the pinned
+      source.
 - [ ] Read the project-local Effect pattern docs before writing service, layer, fiber, schedule, or
       resource code.
+- [ ] Read `repos/effect/LLMS.md` before non-trivial Effect API work.
 - [ ] Use `@effect/tsgo` diagnostics; do not assume generic TypeScript feedback is enough.
 - [ ] Keep the package entrypoint thin after monorepo migration.
 - [ ] Model runtime capabilities as Effect services and layers.
@@ -32,6 +35,7 @@ Read this layer before writing TypeScript runtime code.
 Do not hand the main runtime implementation to `/goal` until the repository has:
 
 - upstream Effect v4 beta source reference material under `repos/effect/`
+- executable source-pin verification through `pnpm effect:source:verify`
 - curated project-local Effect pattern docs
 - monorepo layout migration completed from the user's setup reference
 - Vitest/Effect test infrastructure in place

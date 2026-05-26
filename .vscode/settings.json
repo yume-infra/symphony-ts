@@ -4,16 +4,19 @@
   "editor.formatOnSave": false,
   "typescript.native-preview.tsdk": "node_modules/@typescript/native-preview",
   "typescript.preferences.autoImportFileExcludePatterns": [
-    "**/repos/**"
+    "repos/**"
   ],
   "javascript.preferences.autoImportFileExcludePatterns": [
-    "**/repos/**"
+    "repos/**"
   ],
+  "files.exclude": {
+    "repos/**": true
+  },
   "files.watcherExclude": {
-    "**/repos/**": true
+    "repos/**": true
   },
   "search.exclude": {
-    "**/repos/**": true
+    "repos/**": true
   },
 
   // Auto fix
