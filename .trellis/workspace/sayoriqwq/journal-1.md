@@ -397,3 +397,36 @@ Ran a real Linear-to-symphony-ts-to-local-codex-app-server dispatch using issue 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Effect v4 infrastructure baseline
+
+**Date**: 2026-05-26
+**Task**: Effect v4 infrastructure baseline
+**Branch**: `main`
+
+### Summary
+
+Locked the Effect v4 beta infrastructure guidance around the pinned repos/effect subtree, updated local CLI guidance away from @effect/cli, added JavaScript auto-import exclusion for repos/**, and verified with tsgo-backed typecheck plus full verify.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `94b8f53a0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

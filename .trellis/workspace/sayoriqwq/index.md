@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
-- **Last Active**: 2026-05-14
+- **Total Sessions**: 12
+- **Last Active**: 2026-05-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~389 | Active |
+| `journal-1.md` | ~432 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-05-26 | Effect v4 infrastructure baseline | `94b8f53a0` | `main` |
 | 11 | 2026-05-14 | Real Codex turn dispatch acceptance | `4e61419f0` | `main` |
 | 10 | 2026-05-14 | Codex JSON-RPC environment acceptance | `4132b7929` | `main` |
 | 9 | 2026-05-14 | First-pass Symphony runtime | `79d7a52bd` | `main` |
