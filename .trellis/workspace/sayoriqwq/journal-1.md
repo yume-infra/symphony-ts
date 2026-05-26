@@ -430,3 +430,36 @@ Locked the Effect v4 beta infrastructure guidance around the pinned repos/effect
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Effect source pin verifier
+
+**Date**: 2026-05-26
+**Task**: Effect source pin verifier
+**Branch**: `main`
+
+### Summary
+
+Added an executable Effect source pin manifest and verifier/update script, wired source-pin verification into pnpm verify, documented repos/effect/LLMS.md in agent/spec guidance, and completed full verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `86c70be3d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
