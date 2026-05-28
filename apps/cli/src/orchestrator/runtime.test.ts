@@ -5,7 +5,7 @@ import type { RunEvidenceAttemptInput } from '../run-evidence/service.js'
 import type { WorkspaceBestEffortFailureHandler } from '../workspace/manager.js'
 import type { RuntimeState } from './state.js'
 import { describe, expect, it } from '@effect/vitest'
-import { Effect, Layer } from 'effect'
+import { Deferred, Effect, Layer } from 'effect'
 import { CodexAppServerClient } from '../agent-runner/codex.js'
 import { AgentRunner } from '../agent-runner/runner.js'
 import { ConfigResolverLive } from '../config/resolve.js'
@@ -321,6 +321,117 @@ describe('orchestrator runtime', () => {
     })
   })
 
+  it.effect('interrupts owned stalled worker fibers before scheduling retry', () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const finalized = yield* Deferred.make<void>()
+      const evidenceWritten = yield* Deferred.make<void>()
+      const evidenceInputs: Array<RunEvidenceAttemptInput> = []
+      const stallConfig = {
+        ...config,
+        codex: {
+          ...config.codex,
+          stallTimeoutMs: 1000,
+        },
+      }
+
+      const snapshot = yield* Effect.gen(function* () {
+        yield* pollTick(stallConfig, { nowMs: 1000, launchMode: 'fork' })
+        yield* Deferred.await(started)
+        yield* reconcileRunning(stallConfig, 2501)
+        yield* Deferred.await(finalized)
+        yield* Deferred.await(evidenceWritten)
+
+        const state = yield* OrchestratorState
+
+        return yield* state.snapshot(stallConfig, 2600)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(
+          ConfigResolverLive,
+          OrchestratorStateLive,
+          fakeTracker({
+            candidates: [issue()],
+            refreshes: [],
+          }),
+          fakeStallingRunner(started, finalized),
+          fakePromptRenderer(),
+          fakeCodex(),
+          fakeWorkspace(),
+          fakeLinear(),
+          fakeLogger(),
+          fakeEvidence({
+            inputs: evidenceInputs,
+            onWrite: Deferred.succeed(evidenceWritten, void 0),
+          }),
+        )),
+      )
+
+      expect(snapshot.running).toEqual([])
+      expect(snapshot.retrying[0]).toMatchObject({
+        issueId: 'issue-1',
+        attempt: 1,
+        error: 'worker stalled',
+      })
+      expect(evidenceInputs).toHaveLength(1)
+      expect(buildRunSummary(evidenceInputs[0]!)).toMatchObject({
+        lifecycle: {
+          exit: {
+            classification: 'interruption',
+          },
+        },
+      })
+    }))
+
+  it.effect('interrupts owned workers when a refreshed issue leaves active states', () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const finalized = yield* Deferred.make<void>()
+      const evidenceWritten = yield* Deferred.make<void>()
+      const evidenceInputs: Array<RunEvidenceAttemptInput> = []
+
+      const snapshot = yield* Effect.gen(function* () {
+        yield* pollTick(config, { nowMs: 1000, launchMode: 'fork' })
+        yield* Deferred.await(started)
+        yield* reconcileRunning(config, 2000)
+        yield* Deferred.await(finalized)
+        yield* Deferred.await(evidenceWritten)
+
+        const state = yield* OrchestratorState
+
+        return yield* state.snapshot(config, 2100)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(
+          ConfigResolverLive,
+          OrchestratorStateLive,
+          fakeTracker({
+            candidates: [issue()],
+            refreshes: [[{ ...issue(), state: 'Backlog' }]],
+          }),
+          fakeStallingRunner(started, finalized),
+          fakePromptRenderer(),
+          fakeCodex(),
+          fakeWorkspace(),
+          fakeLinear(),
+          fakeLogger(),
+          fakeEvidence({
+            inputs: evidenceInputs,
+            onWrite: Deferred.succeed(evidenceWritten, void 0),
+          }),
+        )),
+      )
+
+      expect(snapshot.running).toEqual([])
+      expect(snapshot.retrying).toEqual([])
+      expect(evidenceInputs).toHaveLength(1)
+      expect(buildRunSummary(evidenceInputs[0]!)).toMatchObject({
+        lifecycle: {
+          exit: {
+            classification: 'interruption',
+          },
+        },
+      })
+    }))
+
   it.effect('removes terminal issue workspaces during startup cleanup', () =>
     Effect.gen(function* () {
       const removed: Array<string> = []
@@ -445,6 +556,19 @@ function fakeFailingRunner(error: WorkspaceError): Layer.Layer<AgentRunner> {
   })
 }
 
+function fakeStallingRunner(
+  started: Deferred.Deferred<void>,
+  finalized: Deferred.Deferred<void>,
+): Layer.Layer<AgentRunner> {
+  return Layer.succeed(AgentRunner)({
+    runAttempt: () =>
+      Deferred.succeed(started, void 0).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(Deferred.succeed(finalized, void 0)),
+      ),
+  })
+}
+
 function fakePromptRenderer(): Layer.Layer<PromptRenderer> {
   return Layer.succeed(PromptRenderer)({
     render: () => Effect.die(new Error('prompt renderer should not be called by orchestrator runtime tests')),
@@ -544,23 +668,27 @@ function fakeLinear(): Layer.Layer<LinearTransport> {
 function fakeEvidence(options: {
   readonly fail?: boolean
   readonly inputs?: Array<RunEvidenceAttemptInput>
+  readonly onWrite?: Effect.Effect<unknown>
 } = {}): Layer.Layer<RunEvidenceService> {
   return Layer.succeed(RunEvidenceService)({
     writeAttempt: input => Effect.sync(() => {
       options.inputs?.push(input)
-    }).pipe(Effect.andThen(options.fail === true
-      ? Effect.fail(new RunEvidenceError({
-          code: 'evidence_write_failed',
-          path: '/tmp/evidence',
-          reason: 'fake evidence failure',
-        }))
-      : Effect.succeed({
-          directory: '/tmp/evidence',
-          summaryMarkdownPath: '/tmp/evidence/run-summary.md',
-          summaryJsonPath: '/tmp/evidence/run-summary.json',
-          protocolEventsPath: '/tmp/evidence/protocol-events.jsonl',
-          summary: buildRunSummary(input),
-        }))),
+    }).pipe(
+      Effect.andThen(options.onWrite ?? Effect.void),
+      Effect.andThen(options.fail === true
+        ? Effect.fail(new RunEvidenceError({
+            code: 'evidence_write_failed',
+            path: '/tmp/evidence',
+            reason: 'fake evidence failure',
+          }))
+        : Effect.succeed({
+            directory: '/tmp/evidence',
+            summaryMarkdownPath: '/tmp/evidence/run-summary.md',
+            summaryJsonPath: '/tmp/evidence/run-summary.json',
+            protocolEventsPath: '/tmp/evidence/protocol-events.jsonl',
+            summary: buildRunSummary(input),
+          })),
+    ),
   })
 }
 

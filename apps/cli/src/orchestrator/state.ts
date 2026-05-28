@@ -1,3 +1,4 @@
+import type { Fiber as RuntimeFiber } from 'effect/Fiber'
 import type { CodexRuntimeEvent } from '../agent-runner/codex.js'
 import type {
   CodexTotals,
@@ -11,8 +12,17 @@ import type {
 import { Context, Effect, Layer, Ref } from 'effect'
 import { normalizeStateName } from '../domain/types.js'
 
+interface WorkerOwnership {
+  readonly attemptId: string
+  readonly workerFiber: RuntimeFiber<unknown, unknown> | null
+}
+
+export interface RuntimeRunningIssue extends RunningIssue {
+  readonly ownership?: WorkerOwnership | null
+}
+
 export interface RuntimeState {
-  readonly running: ReadonlyMap<string, RunningIssue>
+  readonly running: ReadonlyMap<string, RuntimeRunningIssue>
   readonly claimed: ReadonlySet<string>
   readonly retryAttempts: ReadonlyMap<string, RetryEntry>
   readonly completed: ReadonlySet<string>
@@ -36,13 +46,20 @@ export interface OrchestratorStateShape {
     nowMs: number,
     attempt: number | null,
     workspacePath: string | null,
+    attemptId?: string | null,
   ) => Effect.Effect<boolean>
-  readonly recordCodexEvent: (issueId: string, event: CodexRuntimeEvent) => Effect.Effect<void>
+  readonly attachWorkerFiber: (
+    issueId: string,
+    attemptId: string,
+    workerFiber: RuntimeFiber<unknown, unknown>,
+  ) => Effect.Effect<boolean>
+  readonly recordCodexEvent: (issueId: string, event: CodexRuntimeEvent, attemptId?: string) => Effect.Effect<void>
   readonly handleWorkerExit: (
     issueId: string,
     reason: WorkerExitReason,
     config: ServiceConfig,
     nowMs: number,
+    attemptId?: string,
   ) => Effect.Effect<void>
   readonly scheduleRetry: (
     issue: Pick<Issue, 'id' | 'identifier'>,
@@ -88,12 +105,14 @@ export function makeOrchestratorState(ref: Ref.Ref<RuntimeState>): OrchestratorS
       Ref.get(ref).pipe(
         Effect.map(state => snapshotFromState(state, config, nowMs)),
       ),
-    tryMarkRunning: (issue, config, nowMs, attempt, workspacePath) =>
-      Ref.modify(ref, state => tryMarkRunningInState(state, issue, config, nowMs, attempt, workspacePath)),
-    recordCodexEvent: (issueId, event) =>
-      Ref.update(ref, state => recordCodexEventInState(state, issueId, event)),
-    handleWorkerExit: (issueId, reason, config, nowMs) =>
-      Ref.update(ref, state => handleWorkerExitInState(state, issueId, reason, config, nowMs)),
+    tryMarkRunning: (issue, config, nowMs, attempt, workspacePath, attemptId = null) =>
+      Ref.modify(ref, state => tryMarkRunningInState(state, issue, config, nowMs, attempt, workspacePath, attemptId)),
+    attachWorkerFiber: (issueId, attemptId, workerFiber) =>
+      Ref.modify(ref, state => attachWorkerFiberInState(state, issueId, attemptId, workerFiber)),
+    recordCodexEvent: (issueId, event, attemptId) =>
+      Ref.update(ref, state => recordCodexEventInState(state, issueId, event, attemptId)),
+    handleWorkerExit: (issueId, reason, config, nowMs, attemptId) =>
+      Ref.update(ref, state => handleWorkerExitInState(state, issueId, reason, config, nowMs, attemptId)),
     scheduleRetry: (issue, attempt, error, delayMs, nowMs) =>
       Ref.update(ref, state => scheduleRetryInState(state, issue, attempt, error, delayMs, nowMs)),
     releaseClaim: issueId =>
@@ -176,7 +195,7 @@ function snapshotFromState(
   return {
     pollIntervalMs: config.polling.intervalMs,
     maxConcurrentAgents: config.agent.maxConcurrentAgents,
-    running: [...state.running.values()],
+    running: [...state.running.values()].map(toPublicRunningIssue),
     retrying: [...state.retryAttempts.values()].sort((left, right) => left.dueAtMs - right.dueAtMs),
     codexTotals: {
       ...state.codexTotals,
@@ -193,6 +212,7 @@ export function tryMarkRunningInState(
   nowMs: number,
   attempt: number | null,
   workspacePath: string | null,
+  attemptId: string | null = null,
 ): [boolean, RuntimeState] {
   if (!isDispatchEligible(issue, state, config)) {
     return [false, state]
@@ -206,9 +226,39 @@ export function tryMarkRunningInState(
       startedAtMs: nowMs,
       workspacePath,
       session: null,
+      ownership: attemptId === null
+        ? null
+        : {
+            attemptId,
+            workerFiber: null,
+          },
     }),
     claimed: new Set(state.claimed).add(issue.id),
     retryAttempts: withoutMapValue(state.retryAttempts, issue.id),
+  }]
+}
+
+export function attachWorkerFiberInState(
+  state: RuntimeState,
+  issueId: string,
+  attemptId: string,
+  workerFiber: RuntimeFiber<unknown, unknown>,
+): [boolean, RuntimeState] {
+  const running = state.running.get(issueId)
+
+  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
+    return [false, state]
+  }
+
+  return [true, {
+    ...state,
+    running: new Map(state.running).set(issueId, {
+      ...running,
+      ownership: {
+        attemptId,
+        workerFiber,
+      },
+    }),
   }]
 }
 
@@ -239,10 +289,11 @@ export function handleWorkerExitInState(
   reason: WorkerExitReason,
   config: ServiceConfig,
   nowMs: number,
+  attemptId?: string,
 ): RuntimeState {
   const running = state.running.get(issueId)
 
-  if (running === undefined) {
+  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
     return state
   }
 
@@ -285,10 +336,11 @@ function recordCodexEventInState(
   state: RuntimeState,
   issueId: string,
   event: CodexRuntimeEvent,
+  attemptId?: string,
 ): RuntimeState {
   const running = state.running.get(issueId)
 
-  if (running === undefined) {
+  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
     return state
   }
 
@@ -316,7 +368,14 @@ export function removeRunningForReconciliation(
   state: RuntimeState,
   issueId: string,
   addCompleted: boolean,
+  attemptId?: string,
 ): RuntimeState {
+  const running = state.running.get(issueId)
+
+  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
+    return state
+  }
+
   return {
     ...state,
     running: withoutMapValue(state.running, issueId),
@@ -384,6 +443,20 @@ function isTerminalState(state: string, config: ServiceConfig): boolean {
   const normalized = normalizeStateName(state)
 
   return config.tracker.terminalStates.some(terminalState => normalizeStateName(terminalState) === normalized)
+}
+
+function runningAttemptMatches(running: RuntimeRunningIssue, attemptId: string | undefined): boolean {
+  return attemptId === undefined || running.ownership?.attemptId === attemptId
+}
+
+function toPublicRunningIssue(running: RuntimeRunningIssue): RunningIssue {
+  return {
+    issue: running.issue,
+    attempt: running.attempt,
+    startedAtMs: running.startedAtMs,
+    workspacePath: running.workspacePath,
+    session: running.session,
+  }
 }
 
 function priorityRank(priority: number | null): number {

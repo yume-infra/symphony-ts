@@ -3,6 +3,7 @@ import type { Issue, ServiceConfig } from '../domain/types.js'
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, Ref } from 'effect'
 import {
+  attachWorkerFiberInState,
   failureRetryDelayMs,
   handleWorkerExitInState,
   initialRuntimeState,
@@ -105,6 +106,70 @@ describe('orchestrator state rules', () => {
         maxRetryBackoffMs: 300000,
       },
     })).toBe(300000)
+  })
+
+  it('fences stale worker exits and codex events by attempt id', () => {
+    const [_, firstAttemptState] = tryMarkRunningInState(
+      initialRuntimeState(),
+      issue(),
+      config,
+      0,
+      null,
+      '/tmp/SYM-1',
+      'attempt-old',
+    )
+    const newAttemptState = {
+      ...firstAttemptState,
+      running: new Map(firstAttemptState.running).set('issue-1', {
+        ...firstAttemptState.running.get('issue-1')!,
+        ownership: {
+          attemptId: 'attempt-new',
+          workerFiber: null,
+        },
+      }),
+    }
+
+    const afterOldExit = handleWorkerExitInState(
+      newAttemptState,
+      'issue-1',
+      { _tag: 'normal' },
+      config,
+      5000,
+      'attempt-old',
+    )
+
+    expect(afterOldExit.running.get('issue-1')?.ownership?.attemptId).toBe('attempt-new')
+    expect(afterOldExit.retryAttempts.has('issue-1')).toBe(false)
+  })
+
+  it('attaches worker fibers only to the current attempt owner', () => {
+    const fakeFiber = { id: 1 } as never
+    const [_, runningState] = tryMarkRunningInState(
+      initialRuntimeState(),
+      issue(),
+      config,
+      0,
+      null,
+      '/tmp/SYM-1',
+      'attempt-current',
+    )
+
+    const [staleAttached, afterStaleAttach] = attachWorkerFiberInState(
+      runningState,
+      'issue-1',
+      'attempt-stale',
+      fakeFiber,
+    )
+    const [currentAttached, afterCurrentAttach] = attachWorkerFiberInState(
+      afterStaleAttach,
+      'issue-1',
+      'attempt-current',
+      fakeFiber,
+    )
+
+    expect(staleAttached).toBe(false)
+    expect(currentAttached).toBe(true)
+    expect(afterCurrentAttach.running.get('issue-1')?.ownership?.workerFiber).toBe(fakeFiber)
   })
 
   it.effect('aggregates token deltas and exposes live runtime in snapshots', () =>

@@ -1,3 +1,4 @@
+import type { Fiber as RuntimeFiber } from 'effect/Fiber'
 import type { CodexAppServerClient, CodexRuntimeEvent } from '../agent-runner/codex.js'
 import type { AgentRunResult } from '../agent-runner/runner.js'
 import type { CodexError, ConfigError, PromptRenderError, TrackerError, WorkspaceError } from '../domain/errors.js'
@@ -7,8 +8,8 @@ import type { CleanupSummary } from '../run-evidence/schema.js'
 import type { RunEvidenceService } from '../run-evidence/service.js'
 import type { LinearTransport } from '../tracker/linear.js'
 import type { WorkspaceBestEffortFailure } from '../workspace/manager.js'
-import type { RuntimeState, WorkerExitReason } from './state.js'
-import { Cause, Clock, Effect, Exit, Option } from 'effect'
+import type { RuntimeRunningIssue, RuntimeState, WorkerExitReason } from './state.js'
+import { Cause, Clock, Effect, Exit, Fiber, Option } from 'effect'
 import { AgentRunner } from '../agent-runner/runner.js'
 import { ConfigResolver } from '../config/resolve.js'
 import { normalizeStateName } from '../domain/types.js'
@@ -19,6 +20,57 @@ import { WorkspaceManager, workspacePathFor } from '../workspace/manager.js'
 import { failureRetryDelayMs, isDispatchEligible, OrchestratorState, removeRunningForReconciliation, sortCandidates } from './state.js'
 
 type WorkerRunError = CodexError | PromptRenderError | TrackerError | WorkspaceError
+
+interface WorkerInterruption {
+  readonly issueId: string
+  readonly issueIdentifier: string
+  readonly attemptId: string | null
+  readonly workerFiber: RuntimeFiber<unknown, unknown> | null
+  readonly reason: 'stalled' | 'not_active'
+  readonly error: string
+}
+
+interface RunningReconciliationResult {
+  readonly state: RuntimeState
+  readonly interruptions: ReadonlyArray<WorkerInterruption>
+}
+
+let nextWorkerAttemptSequence = 0
+
+const interruptWorkerAttempts = Effect.fn('interruptWorkerAttempts')(function* (
+  interruptions: ReadonlyArray<WorkerInterruption>,
+): Effect.fn.Return<void, never, RuntimeLogger> {
+  const logger = yield* RuntimeLogger
+
+  for (const interruption of interruptions) {
+    if (interruption.workerFiber === null) {
+      yield* logger.warn('worker_interrupt_unavailable', {
+        issue_id: interruption.issueId,
+        issue_identifier: interruption.issueIdentifier,
+        attempt_id: interruption.attemptId ?? undefined,
+        reason: interruption.error,
+      })
+      continue
+    }
+
+    yield* logger.warn('worker_interrupt_requested', {
+      issue_id: interruption.issueId,
+      issue_identifier: interruption.issueIdentifier,
+      attempt_id: interruption.attemptId ?? undefined,
+      reason: interruption.error,
+    })
+    yield* Fiber.interrupt(interruption.workerFiber).pipe(
+      Effect.catchCause(cause =>
+        logger.warn('worker_interrupt_failed', {
+          issue_id: interruption.issueId,
+          issue_identifier: interruption.issueIdentifier,
+          attempt_id: interruption.attemptId ?? undefined,
+          reason: Cause.pretty(cause),
+        }),
+      ),
+    )
+  }
+})
 
 export interface PollTickOptions {
   readonly nowMs: number
@@ -39,12 +91,14 @@ export const reconcileRunning = Effect.fn('reconcileRunning')(function* (
   const stateService = yield* OrchestratorState
   const tracker = yield* TrackerClient
   const logger = yield* RuntimeLogger
-  const state = yield* stateService.get
-  let nextState = reconcileStalledRuns(state, config, nowMs)
-  const runningIds = [...nextState.running.keys()]
+  const stalledReconciliation = reconcileStalledRunsWithInterrupts(yield* stateService.get, config, nowMs)
+  yield* stateService.set(stalledReconciliation.state)
+  yield* interruptWorkerAttempts(stalledReconciliation.interruptions)
+
+  const stateAfterStalls = yield* stateService.get
+  const runningIds = [...stateAfterStalls.running.keys()]
 
   if (runningIds.length === 0) {
-    yield* stateService.set(nextState)
     return
   }
 
@@ -62,43 +116,12 @@ export const reconcileRunning = Effect.fn('reconcileRunning')(function* (
   )
 
   if (refreshed.length === 0) {
-    yield* stateService.set(nextState)
     return
   }
 
-  for (const issue of refreshed) {
-    const running = nextState.running.get(issue.id)
-
-    if (running === undefined) {
-      continue
-    }
-
-    if (isTerminal(issue, config)) {
-      nextState = {
-        ...nextState,
-        running: new Map(nextState.running).set(issue.id, {
-          ...running,
-          issue,
-        }),
-      }
-      continue
-    }
-
-    if (!isActive(issue, config)) {
-      nextState = removeRunningForReconciliation(nextState, issue.id, false)
-      continue
-    }
-
-    nextState = {
-      ...nextState,
-      running: new Map(nextState.running).set(issue.id, {
-        ...running,
-        issue,
-      }),
-    }
-  }
-
-  yield* stateService.set(nextState)
+  const refreshedReconciliation = reconcileRefreshedRunningIssues(yield* stateService.get, refreshed, config)
+  yield* stateService.set(refreshedReconciliation.state)
+  yield* interruptWorkerAttempts(refreshedReconciliation.interruptions)
 })
 
 const handleWorkerExitEffect = Effect.fn('handleWorkerExitEffect')(function* (
@@ -106,10 +129,11 @@ const handleWorkerExitEffect = Effect.fn('handleWorkerExitEffect')(function* (
   reason: WorkerExitReason,
   config: ServiceConfig,
   nowMs: number,
+  attemptId?: string,
 ): Effect.fn.Return<void, never, OrchestratorState> {
   const state = yield* OrchestratorState
 
-  yield* state.handleWorkerExit(issue.id, reason, config, nowMs)
+  yield* state.handleWorkerExit(issue.id, reason, config, nowMs, attemptId)
 })
 
 const handleWorkerSuccessEffect = Effect.fn('handleWorkerSuccessEffect')(function* (
@@ -117,13 +141,20 @@ const handleWorkerSuccessEffect = Effect.fn('handleWorkerSuccessEffect')(functio
   config: ServiceConfig,
   nowMs: number,
   cleanupEnabled: boolean,
+  attemptId?: string,
 ): Effect.fn.Return<void, never, OrchestratorState | WorkspaceManager | RuntimeLogger> {
   if (isTerminal(result.issue, config)) {
     const state = yield* OrchestratorState
     const workspace = yield* WorkspaceManager
     const logger = yield* RuntimeLogger
     const current = yield* state.get
-    yield* state.set(removeRunningForReconciliation(current, result.issue.id, true))
+    const next = removeRunningForReconciliation(current, result.issue.id, true, attemptId)
+
+    if (next === current) {
+      return
+    }
+
+    yield* state.set(next)
 
     if (!cleanupEnabled) {
       yield* logger.warn('workspace_cleanup_skipped', {
@@ -147,11 +178,16 @@ const handleWorkerSuccessEffect = Effect.fn('handleWorkerSuccessEffect')(functio
   if (!isActive(result.issue, config)) {
     const state = yield* OrchestratorState
     const current = yield* state.get
-    yield* state.set(removeRunningForReconciliation(current, result.issue.id, false))
+    const next = removeRunningForReconciliation(current, result.issue.id, false, attemptId)
+
+    if (next !== current) {
+      yield* state.set(next)
+    }
+
     return
   }
 
-  yield* handleWorkerExitEffect(result.issue, { _tag: 'normal' }, config, nowMs)
+  yield* handleWorkerExitEffect(result.issue, { _tag: 'normal' }, config, nowMs, attemptId)
 })
 
 const dispatchIssue = Effect.fn('dispatchIssue')(function* (
@@ -177,12 +213,14 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
   const logger = yield* RuntimeLogger
   const evidence = yield* RunEvidenceServiceTag
   const workspacePath = workspacePathFor(config.workspace.root, issue.identifier)
+  const attemptId = makeWorkerAttemptId(issue, attempt, options.nowMs)
   const marked = yield* state.tryMarkRunning(
     issue,
     config,
     options.nowMs,
     attempt,
     workspacePath,
+    attemptId,
   )
 
   if (!marked) {
@@ -199,7 +237,7 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
       Effect.sync(() => {
         codexEvents.push(event)
       }).pipe(
-        Effect.andThen(state.recordCodexEvent(issue.id, event)),
+        Effect.andThen(state.recordCodexEvent(issue.id, event, attemptId)),
         Effect.andThen(logger.info('codex_event', {
           issue_id: issue.id,
           issue_identifier: issue.identifier,
@@ -219,8 +257,7 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
         Effect.andThen(logger.warn('workspace_after_run_failed', workspaceBestEffortFailureContext(issue, failure))),
       ),
   })
-  const workerWithEvidence = Effect.gen(function* () {
-    const workerExit = yield* Effect.exit(worker)
+  const finalizeWorkerExit = (workerExit: Exit.Exit<AgentRunResult, WorkerRunError>) => Effect.gen(function* () {
     const completedAtMs = yield* Clock.currentTimeMillis
     const evidenceIssue = Exit.isSuccess(workerExit) ? workerExit.value.issue : issue
     const evidenceWorkspacePath = Exit.isSuccess(workerExit) ? workerExit.value.workspace.path : workspacePath
@@ -256,7 +293,24 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
     }
 
     if (Exit.isSuccess(workerExit)) {
-      yield* handleWorkerSuccessEffect(workerExit.value, config, options.nowMs, evidenceWritten)
+      yield* handleWorkerSuccessEffect(workerExit.value, config, options.nowMs, evidenceWritten, attemptId)
+      return
+    }
+
+    if (Cause.hasInterruptsOnly(workerExit.cause)) {
+      yield* logger.warn('worker_interrupted', {
+        issue_id: issue.id,
+        issue_identifier: issue.identifier,
+        attempt_id: attemptId,
+        reason: describeWorkerExit(workerExit),
+      })
+      yield* handleWorkerExitEffect(
+        issue,
+        { _tag: 'canceled', error: describeWorkerExit(workerExit) },
+        config,
+        options.nowMs,
+        attemptId,
+      )
       return
     }
 
@@ -270,15 +324,28 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
       { _tag: 'failed', error: describeWorkerExit(workerExit) },
       config,
       options.nowMs,
+      attemptId,
     )
   })
 
   if (options.launchMode === 'inline') {
-    yield* workerWithEvidence
+    const workerExit = yield* Effect.exit(worker)
+    yield* finalizeWorkerExit(workerExit)
     return
   }
 
-  yield* Effect.forkChild(workerWithEvidence, { startImmediately: true })
+  const workerFiber = yield* Effect.forkChild(worker, { startImmediately: true })
+  const attached = yield* state.attachWorkerFiber(issue.id, attemptId, workerFiber)
+
+  if (!attached) {
+    yield* Fiber.interrupt(workerFiber)
+    return
+  }
+
+  yield* Effect.forkChild(Effect.gen(function* () {
+    const workerExit = yield* Fiber.await(workerFiber)
+    yield* finalizeWorkerExit(workerExit)
+  }), { startImmediately: true })
 })
 
 const processDueRetries = Effect.fn('processDueRetries')(function* (
@@ -409,24 +476,39 @@ export function reconcileStalledRuns(
   config: ServiceConfig,
   nowMs: number,
 ): RuntimeState {
+  return reconcileStalledRunsWithInterrupts(state, config, nowMs).state
+}
+
+function reconcileStalledRunsWithInterrupts(
+  state: RuntimeState,
+  config: ServiceConfig,
+  nowMs: number,
+): RunningReconciliationResult {
   if (config.codex.stallTimeoutMs <= 0) {
-    return state
+    return { state, interruptions: [] }
   }
 
   let nextState = state
+  const interruptions: Array<WorkerInterruption> = []
 
   for (const running of state.running.values()) {
     const lastActivity = running.session?.lastCodexTimestamp ?? running.startedAtMs
 
     if (nowMs - lastActivity > config.codex.stallTimeoutMs) {
-      nextState = removeRunningForReconciliation(nextState, running.issue.id, false)
+      const nextAttempt = (running.attempt ?? 0) + 1
+      interruptions.push(workerInterruption(
+        running,
+        'stalled',
+        `worker stalled after ${nowMs - lastActivity}ms without codex activity`,
+      ))
+      nextState = removeRunningForReconciliation(nextState, running.issue.id, false, running.ownership?.attemptId)
       nextState = {
         ...nextState,
         retryAttempts: new Map(nextState.retryAttempts).set(running.issue.id, {
           issueId: running.issue.id,
           identifier: running.issue.identifier,
-          attempt: (running.attempt ?? 0) + 1,
-          dueAtMs: nowMs + failureRetryDelayMs((running.attempt ?? 0) + 1, config),
+          attempt: nextAttempt,
+          dueAtMs: nowMs + failureRetryDelayMs(nextAttempt, config),
           error: 'worker stalled',
         }),
         claimed: new Set(nextState.claimed).add(running.issue.id),
@@ -434,7 +516,55 @@ export function reconcileStalledRuns(
     }
   }
 
-  return nextState
+  return { state: nextState, interruptions }
+}
+
+function reconcileRefreshedRunningIssues(
+  state: RuntimeState,
+  refreshed: ReadonlyArray<Issue>,
+  config: ServiceConfig,
+): RunningReconciliationResult {
+  let nextState = state
+  const interruptions: Array<WorkerInterruption> = []
+
+  for (const issue of refreshed) {
+    const running = nextState.running.get(issue.id)
+
+    if (running === undefined) {
+      continue
+    }
+
+    if (isTerminal(issue, config)) {
+      nextState = {
+        ...nextState,
+        running: new Map(nextState.running).set(issue.id, {
+          ...running,
+          issue,
+        }),
+      }
+      continue
+    }
+
+    if (!isActive(issue, config)) {
+      interruptions.push(workerInterruption(
+        running,
+        'not_active',
+        `issue state ${issue.state} is no longer active`,
+      ))
+      nextState = removeRunningForReconciliation(nextState, issue.id, false, running.ownership?.attemptId)
+      continue
+    }
+
+    nextState = {
+      ...nextState,
+      running: new Map(nextState.running).set(issue.id, {
+        ...running,
+        issue,
+      }),
+    }
+  }
+
+  return { state: nextState, interruptions }
 }
 
 function isActive(issue: Issue, config: ServiceConfig): boolean {
@@ -447,6 +577,27 @@ function isTerminal(issue: Issue, config: ServiceConfig): boolean {
   const normalized = normalizeStateName(issue.state)
 
   return config.tracker.terminalStates.some(state => normalizeStateName(state) === normalized)
+}
+
+function workerInterruption(
+  running: RuntimeRunningIssue,
+  reason: WorkerInterruption['reason'],
+  error: string,
+): WorkerInterruption {
+  return {
+    issueId: running.issue.id,
+    issueIdentifier: running.issue.identifier,
+    attemptId: running.ownership?.attemptId ?? null,
+    workerFiber: running.ownership?.workerFiber ?? null,
+    reason,
+    error,
+  }
+}
+
+function makeWorkerAttemptId(issue: Issue, attempt: number | null, nowMs: number): string {
+  nextWorkerAttemptSequence += 1
+
+  return `${issue.id}:${attempt ?? 'initial'}:${nowMs}:${nextWorkerAttemptSequence}`
 }
 
 function workerFailureContext(issue: Issue, error: WorkerRunError) {
