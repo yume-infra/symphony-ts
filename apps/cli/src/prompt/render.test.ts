@@ -10,6 +10,7 @@ const sampleIssue: Issue = {
   description: 'Build the service',
   priority: 1,
   state: 'Todo',
+  stateType: null,
   branchName: 'sayori/sym-1',
   url: 'https://linear.app/sym/issue/SYM-1',
   labels: ['backend', 'urgent'],
@@ -28,11 +29,11 @@ describe('renderPrompt', () => {
   it.effect('renders strict issue and attempt variables', () =>
     Effect.gen(function* () {
       const rendered = yield* renderPrompt(
-        'Work on {{ issue.identifier }}: {{ issue.title }} attempt={{ attempt }}',
-        { issue: sampleIssue, attempt: 2 },
+        'Work on {{ issue.identifier }}: {{ issue.title }} state_type={{ issue.state_type }} attempt={{ attempt }}',
+        { issue: { ...sampleIssue, stateType: 'unstarted' }, attempt: 2 },
       )
 
-      expect(rendered).toBe('Work on SYM-1: Implement runtime attempt=2')
+      expect(rendered).toBe('Work on SYM-1: Implement runtime state_type=unstarted attempt=2')
     }))
 
   it.effect('preserves arrays for simple loops', () =>

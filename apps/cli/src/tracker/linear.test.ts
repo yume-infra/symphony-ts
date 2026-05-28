@@ -124,6 +124,7 @@ describe('linear tracker', () => {
       expect(issues.map(issue => issue.identifier)).toEqual(['SYM-1', 'SYM-2'])
       expect(fake.requests).toHaveLength(2)
       expect(fake.requests[0]?.query).toContain('slugId')
+      expect(fake.requests[0]?.query).toContain('state { name type }')
       expect(fake.requests[0]?.variables).toMatchObject({
         projectSlug: 'symphony',
         activeStates: ['Todo', 'In Progress'],
@@ -151,6 +152,7 @@ describe('linear tracker', () => {
           state: 'Done',
         },
       ],
+      stateType: 'unstarted',
       createdAt: '2026-05-14T00:00:00.000Z',
       updatedAt: null,
     })
@@ -258,6 +260,7 @@ function linearIssue(options: {
   readonly identifier?: string
   readonly title?: string
   readonly state?: string
+  readonly stateType?: string
   readonly priority?: number | string | null
   readonly labels?: ReadonlyArray<{ readonly name: string }>
   readonly blockerState?: string
@@ -274,7 +277,7 @@ function linearIssue(options: {
     url: 'https://linear.app/sym/issue/SYM-1',
     createdAt: options.createdAt ?? '2026-05-14T00:00:00Z',
     updatedAt: options.updatedAt ?? '2026-05-14T00:01:00Z',
-    state: { name: options.state ?? 'Todo' },
+    state: { name: options.state ?? 'Todo', type: options.stateType ?? 'unstarted' },
     labels: { nodes: options.labels ?? [] },
     inverseRelations: {
       nodes: [
@@ -283,7 +286,7 @@ function linearIssue(options: {
           issue: {
             id: 'blocker-1',
             identifier: 'SYM-0',
-            state: { name: options.blockerState ?? 'Done' },
+            state: { name: options.blockerState ?? 'Done', type: 'completed' },
           },
         },
       ],

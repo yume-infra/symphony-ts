@@ -18,6 +18,7 @@ const issue: Issue = {
   description: null,
   priority: 1,
   state: 'Todo',
+  stateType: null,
   branchName: null,
   url: null,
   labels: [],

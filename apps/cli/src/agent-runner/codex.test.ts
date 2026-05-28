@@ -1,6 +1,6 @@
 import type { Issue, ServiceConfig } from '../domain/types.js'
 import type { LinearGraphQLRequest, LinearGraphQLResponse } from '../tracker/linear.js'
-import type { CodexRunParams } from './codex.js'
+import type { CodexRunParams, CodexRuntimeEvent } from './codex.js'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, Layer, Schema } from 'effect'
@@ -18,6 +18,7 @@ const issue: Issue = {
   description: null,
   priority: 1,
   state: 'Todo',
+  stateType: null,
   branchName: null,
   url: null,
   labels: [],
@@ -109,11 +110,11 @@ describe('codex app-server boundary', () => {
         },
         turnCompleted(),
       ])
-      const events: Array<string> = []
+      const events: Array<CodexRuntimeEvent> = []
       const result = yield* runCodexScriptTurn(script, {
         ...baseParams,
         onEvent: event => Effect.sync(() => {
-          events.push(event.event)
+          events.push(event)
         }),
       }).pipe(Effect.provide(fakeLinear([]).layer))
 
@@ -132,12 +133,46 @@ describe('codex app-server boundary', () => {
           },
         },
       })
-      expect(events).toEqual([
+      expect(events.map(event => event.event)).toEqual([
+        'initialize',
+        'initialize',
+        'thread/start',
+        'thread/start',
+        'turn/start',
+        'turn/start',
         'session_started',
         'thread/tokenUsage/updated',
         'account/rateLimits/updated',
         'turn/completed',
       ])
+      expect(events[0]).toMatchObject({
+        type: 'protocol_client_request',
+        method: 'initialize',
+        protocolId: '1',
+      })
+      expect(events[1]).toMatchObject({
+        type: 'protocol_response',
+        method: 'initialize',
+        protocolId: '1',
+      })
+      expect(events[2]).toMatchObject({
+        type: 'protocol_client_request',
+        method: 'thread/start',
+        protocolId: '2',
+      })
+      expect(events[3]).toMatchObject({
+        type: 'protocol_response',
+        method: 'thread/start',
+        protocolId: '2',
+      })
+      expect(events[4]).toMatchObject({
+        type: 'protocol_client_request',
+        method: 'turn/start',
+        protocolId: '3',
+        details: expect.objectContaining({
+          promptLength: baseParams.prompt.length,
+        }),
+      })
       expect(recordAt(script.sentMessages, 0)).toMatchObject({
         id: 1,
         method: 'initialize',
@@ -365,8 +400,14 @@ describe('codex app-server boundary', () => {
         turnCompleted(),
       ])
       const fake = fakeLinear([{ status: 200, body: { data: { viewer: { id: 'me' } } } }])
+      const events: Array<CodexRuntimeEvent> = []
 
-      yield* runCodexScriptTurn(script, baseParams).pipe(Effect.provide(fake.layer))
+      yield* runCodexScriptTurn(script, {
+        ...baseParams,
+        onEvent: event => Effect.sync(() => {
+          events.push(event)
+        }),
+      }).pipe(Effect.provide(fake.layer))
 
       expect(fake.requests).toHaveLength(1)
       expect(fake.requests[0]).toMatchObject({
@@ -389,13 +430,33 @@ describe('codex app-server boundary', () => {
           },
         },
       })
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'tool_call',
+        event: 'tool_call',
+        toolName: 'linear_graphql',
+        callId: 'call-1',
+        success: true,
+        details: expect.objectContaining({
+          input: expect.objectContaining({
+            query: 'query Viewer { viewer { id } }',
+          }),
+          output: expect.objectContaining({
+            success: true,
+            body: expect.objectContaining({
+              data: expect.objectContaining({
+                viewer: expect.objectContaining({ id: 'me' }),
+              }),
+            }),
+          }),
+        }),
+      }))
     }))
 
   it.live('runs the live JSON-RPC bridge through the Effect child-process adapter', () =>
     withFakeWorkspace(
       workspace =>
         Effect.gen(function* () {
-          const events: Array<string> = []
+          const events: Array<CodexRuntimeEvent> = []
           const envStatuses: Array<string | null> = []
           const processIds: Array<string | null> = []
           const fake = fakeLinear([])
@@ -410,7 +471,7 @@ describe('codex app-server boundary', () => {
               cwd: workspace.path,
               workspacePath: workspace.path,
               onEvent: event => Effect.sync(() => {
-                events.push(event.event)
+                events.push(event)
                 if (event.event === 'symphony/test/env') {
                   envStatuses.push(event.message)
                 }
@@ -439,12 +500,26 @@ describe('codex app-server boundary', () => {
               totalTokens: 10,
             },
           })
-          expect(events).toEqual([
+          expect(events.map(event => event.event)).toEqual([
+            'initialize',
+            'initialize',
+            'thread/start',
+            'thread/start',
+            'turn/start',
+            'turn/start',
             'session_started',
             'symphony/test/env',
             'thread/tokenUsage/updated',
             'turn/completed',
           ])
+          expect(events[2]).toMatchObject({
+            type: 'protocol_client_request',
+            method: 'thread/start',
+          })
+          expect(events[3]).toMatchObject({
+            type: 'protocol_response',
+            method: 'thread/start',
+          })
           expect(envStatuses).toEqual(['absent'])
           expect(processIds.every(processId => processId !== null)).toBe(true)
           expect(fake.requests).toHaveLength(0)

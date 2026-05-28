@@ -1,6 +1,7 @@
 import type { AgentRunParams, AgentRunResult } from '../agent-runner/runner.js'
 import type { Issue, Workspace } from '../domain/types.js'
 import type { LogContext, LogLevel } from '../observability/logging.js'
+import type { RunEvidenceAttemptInput } from '../run-evidence/service.js'
 import type { WorkspaceBestEffortFailureHandler } from '../workspace/manager.js'
 import type { RuntimeState } from './state.js'
 import { describe, expect, it } from '@effect/vitest'
@@ -8,9 +9,10 @@ import { Effect, Layer } from 'effect'
 import { CodexAppServerClient } from '../agent-runner/codex.js'
 import { AgentRunner } from '../agent-runner/runner.js'
 import { ConfigResolverLive } from '../config/resolve.js'
-import { TrackerError, WorkspaceError } from '../domain/errors.js'
+import { RunEvidenceError, TrackerError, WorkspaceError } from '../domain/errors.js'
 import { RuntimeLogger } from '../observability/logging.js'
 import { PromptRenderer } from '../prompt/render.js'
+import { buildRunSummary, RunEvidenceService } from '../run-evidence/service.js'
 import { LinearTransport, TrackerClient } from '../tracker/linear.js'
 import { WorkspaceManager } from '../workspace/manager.js'
 import { pollTick, reconcileRunning, reconcileStalledRuns, startupTerminalWorkspaceCleanup } from './runtime.js'
@@ -41,6 +43,7 @@ describe('orchestrator runtime', () => {
           fakeWorkspace(),
           fakeLinear(),
           fakeLogger(),
+          fakeEvidence(),
         )),
       )
 
@@ -74,12 +77,61 @@ describe('orchestrator runtime', () => {
           fakeWorkspace(removed),
           fakeLinear(),
           fakeLogger(),
+          fakeEvidence(),
         )),
       )
 
       expect(snapshot.running).toEqual([])
       expect(snapshot.retrying).toEqual([])
       expect(removed).toEqual(['SYM-1'])
+    }))
+
+  it.effect('keeps terminal workspaces when run evidence writing fails', () =>
+    Effect.gen(function* () {
+      const removed: Array<string> = []
+      const logs: Array<FakeLogEntry> = []
+      const snapshot = yield* Effect.gen(function* () {
+        yield* pollTick(config, { nowMs: 1000, launchMode: 'inline' })
+        const state = yield* OrchestratorState
+
+        return yield* state.snapshot(config, 2000)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(
+          ConfigResolverLive,
+          OrchestratorStateLive,
+          fakeTracker({
+            candidates: [issue()],
+            refreshes: [],
+          }),
+          fakeRunner([], { issue: { ...issue(), state: 'Done' } }),
+          fakePromptRenderer(),
+          fakeCodex(),
+          fakeWorkspace(removed),
+          fakeLinear(),
+          fakeLogger(logs),
+          fakeEvidence({ fail: true }),
+        )),
+      )
+
+      expect(snapshot.running).toEqual([])
+      expect(snapshot.retrying).toEqual([])
+      expect(removed).toEqual([])
+      expect(logs).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        message: 'run_evidence_write_failed',
+        context: expect.objectContaining({
+          error_code: 'evidence_write_failed',
+          issue_identifier: 'SYM-1',
+        }),
+      }))
+      expect(logs).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        message: 'workspace_cleanup_skipped',
+        context: expect.objectContaining({
+          issue_identifier: 'SYM-1',
+          reason: 'run evidence was not written',
+        }),
+      }))
     }))
 
   it.effect('keeps terminal running issues until the worker exits so after_run can fire before cleanup', () =>
@@ -133,6 +185,7 @@ describe('orchestrator runtime', () => {
           fakeWorkspace(),
           fakeLinear(),
           fakeLogger(logs),
+          fakeEvidence(),
         )),
       )
 
@@ -167,6 +220,7 @@ describe('orchestrator runtime', () => {
           fakeWorkspace(),
           fakeLinear(),
           fakeLogger(logs),
+          fakeEvidence(),
         )),
       )
 
@@ -179,6 +233,53 @@ describe('orchestrator runtime', () => {
           workspace_operation: 'after_run',
         }),
       }))
+    }))
+
+  it.effect('passes the unreduced worker failure exit to evidence before scheduling retry', () =>
+    Effect.gen(function* () {
+      const evidenceInputs: Array<RunEvidenceAttemptInput> = []
+      const snapshot = yield* Effect.gen(function* () {
+        yield* pollTick(config, { nowMs: 1000, launchMode: 'inline' })
+        const state = yield* OrchestratorState
+
+        return yield* state.snapshot(config, 2000)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(
+          ConfigResolverLive,
+          OrchestratorStateLive,
+          fakeTracker({
+            candidates: [issue()],
+            refreshes: [],
+          }),
+          fakeFailingRunner(workspaceFailure('before_run failed', 'before_run')),
+          fakePromptRenderer(),
+          fakeCodex(),
+          fakeWorkspace(),
+          fakeLinear(),
+          fakeLogger(),
+          fakeEvidence({ inputs: evidenceInputs }),
+        )),
+      )
+
+      expect(evidenceInputs).toHaveLength(1)
+      expect(buildRunSummary(evidenceInputs[0]!)).toMatchObject({
+        lifecycle: {
+          exit: {
+            status: 'failure',
+            classification: 'typed_failure',
+            typedErrors: [
+              {
+                code: 'hook_failed',
+                reason: 'before_run failed',
+              },
+            ],
+          },
+        },
+      })
+      expect(snapshot.retrying[0]).toMatchObject({
+        issueId: 'issue-1',
+        attempt: 1,
+      })
     }))
 
   it('detects stalled workers and schedules retry', () => {
@@ -338,6 +439,12 @@ function fakeRunner(
   })
 }
 
+function fakeFailingRunner(error: WorkspaceError): Layer.Layer<AgentRunner> {
+  return Layer.succeed(AgentRunner)({
+    runAttempt: () => Effect.fail(error),
+  })
+}
+
 function fakePromptRenderer(): Layer.Layer<PromptRenderer> {
   return Layer.succeed(PromptRenderer)({
     render: () => Effect.die(new Error('prompt renderer should not be called by orchestrator runtime tests')),
@@ -431,6 +538,29 @@ function workspace(identifier: string): Workspace {
 function fakeLinear(): Layer.Layer<LinearTransport> {
   return Layer.succeed(LinearTransport)({
     execute: () => Effect.die(new Error('linear transport should not be called by orchestrator runtime tests')),
+  })
+}
+
+function fakeEvidence(options: {
+  readonly fail?: boolean
+  readonly inputs?: Array<RunEvidenceAttemptInput>
+} = {}): Layer.Layer<RunEvidenceService> {
+  return Layer.succeed(RunEvidenceService)({
+    writeAttempt: input => Effect.sync(() => {
+      options.inputs?.push(input)
+    }).pipe(Effect.andThen(options.fail === true
+      ? Effect.fail(new RunEvidenceError({
+          code: 'evidence_write_failed',
+          path: '/tmp/evidence',
+          reason: 'fake evidence failure',
+        }))
+      : Effect.succeed({
+          directory: '/tmp/evidence',
+          summaryMarkdownPath: '/tmp/evidence/run-summary.md',
+          summaryJsonPath: '/tmp/evidence/run-summary.json',
+          protocolEventsPath: '/tmp/evidence/protocol-events.jsonl',
+          summary: buildRunSummary(input),
+        }))),
   })
 }
 

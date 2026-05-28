@@ -89,3 +89,14 @@ export class CodexError extends Data.TaggedError('CodexError')<{
   readonly sessionId?: string
   readonly cause?: unknown
 }> {}
+
+export class RunEvidenceError extends Data.TaggedError('RunEvidenceError')<{
+  readonly code:
+    | 'evidence_path_outside_root'
+    | 'evidence_directory_create_failed'
+    | 'evidence_schema_encode_failed'
+    | 'evidence_write_failed'
+  readonly path: string
+  readonly reason: string
+  readonly cause?: unknown
+}> {}

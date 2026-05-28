@@ -11,6 +11,7 @@ export interface Issue {
   readonly description: string | null
   readonly priority: number | null
   readonly state: string
+  readonly stateType: string | null
   readonly branchName: string | null
   readonly url: string | null
   readonly labels: ReadonlyArray<string>

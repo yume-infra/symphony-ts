@@ -3,7 +3,7 @@
   "name": "agent-run-summary-artifacts",
   "title": "Generate agent run summary artifacts",
   "description": "Produce human-readable and machine-readable post-run assets from Codex session data and runtime events.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

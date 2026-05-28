@@ -2,28 +2,117 @@ import type * as Scope from 'effect/Scope'
 import type { CodexConfig, Issue, ServiceConfig } from '../domain/types.js'
 import type { LinearTransportShape } from '../tracker/linear.js'
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { Clock, Context, Effect, Layer, Queue, Ref, Schema, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { executeLinearGraphQLTool } from '../client-tools/linear-graphql.js'
 import { CodexError } from '../domain/errors.js'
+import { redactText, redactUnknown } from '../run-evidence/redaction.js'
 import { LinearTransport } from '../tracker/linear.js'
-
-export interface CodexRuntimeEvent {
-  readonly event: string
-  readonly timestamp: number
-  readonly codexAppServerPid: string | null
-  readonly sessionId: string | null
-  readonly message: string | null
-  readonly usage: TokenUsage | null
-  readonly rateLimits: unknown
-}
 
 interface TokenUsage {
   readonly inputTokens: number
   readonly outputTokens: number
   readonly totalTokens: number
 }
+
+const NullableString = Schema.NullOr(Schema.String)
+const NullableBoolean = Schema.NullOr(Schema.Boolean)
+const CodexTokenUsageSchema = Schema.Struct({
+  inputTokens: Schema.Number,
+  outputTokens: Schema.Number,
+  totalTokens: Schema.Number,
+})
+const CodexRuntimeEventBaseSchema = {
+  timestamp: Schema.Number,
+  event: Schema.String,
+  codexAppServerPid: NullableString,
+  sessionId: NullableString,
+  message: NullableString,
+  usage: Schema.NullOr(CodexTokenUsageSchema),
+  rateLimits: Schema.Unknown,
+} as const
+const CodexRuntimeEventSchema = Schema.Union([
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('session_started'),
+    threadId: NullableString,
+    turnId: NullableString,
+    rawSessionPath: NullableString,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('protocol_client_request'),
+    method: Schema.String,
+    protocolId: NullableString,
+    threadId: NullableString,
+    turnId: NullableString,
+    details: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('protocol_request'),
+    method: Schema.String,
+    protocolId: NullableString,
+    threadId: NullableString,
+    turnId: NullableString,
+    details: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('protocol_response'),
+    method: NullableString,
+    protocolId: NullableString,
+    threadId: NullableString,
+    turnId: NullableString,
+    details: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('protocol_notification'),
+    method: Schema.String,
+    threadId: NullableString,
+    turnId: NullableString,
+    details: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('tool_call'),
+    toolName: Schema.String,
+    callId: NullableString,
+    success: NullableBoolean,
+    error: NullableString,
+    threadId: NullableString,
+    turnId: NullableString,
+    details: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('agent_message'),
+    text: Schema.String,
+    threadId: NullableString,
+    turnId: NullableString,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('turn_completed'),
+    status: Schema.String,
+    threadId: NullableString,
+    turnId: NullableString,
+    finalAnswer: NullableString,
+    rawSessionPath: NullableString,
+    details: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...CodexRuntimeEventBaseSchema,
+    type: Schema.Literal('runtime'),
+    details: Schema.Unknown,
+  }),
+])
+export type CodexRuntimeEvent = Schema.Schema.Type<typeof CodexRuntimeEventSchema>
+export const decodeCodexRuntimeEvent = Schema.decodeUnknownEffect(CodexRuntimeEventSchema)
+export const encodeCodexRuntimeEvent = Schema.encodeUnknownEffect(CodexRuntimeEventSchema)
 
 export interface CodexRunParams {
   readonly command: string
@@ -83,6 +172,7 @@ type ProtocolStage = 'initialize' | 'thread startup' | 'turn/start'
 
 interface PendingProtocolRequest {
   readonly id: JsonRpcId
+  readonly method: string
   readonly stage: ProtocolStage
   readonly deadlineMs: number
 }
@@ -182,6 +272,11 @@ interface DynamicToolResponse {
 interface DynamicToolExecution {
   readonly event: 'tool_call' | 'unsupported_tool_call'
   readonly response: DynamicToolResponse
+  readonly toolName: string
+  readonly callId: string | null
+  readonly success: boolean
+  readonly error: string | null
+  readonly result: unknown
 }
 
 interface TurnState {
@@ -292,6 +387,8 @@ const enqueueProcessLine = Effect.fn('enqueueProcessLine')((
 const emit = Effect.fn('emit')((params: CodexRunParams, event: CodexRuntimeEvent): Effect.Effect<void> =>
   params.onEvent?.(event) ?? Effect.void)
 
+const emitRuntimeEvent = emit
+
 const maybeEmitSessionStarted = Effect.fn('maybeEmitSessionStarted')((
   params: CodexRunParams,
   state: TurnState,
@@ -363,6 +460,7 @@ const executeDynamicToolCall = Effect.fn('executeDynamicToolCall')(function* (
 ): Effect.fn.Return<DynamicToolExecution, never, LinearTransport> {
   const payload = isRecord(requestParams) ? requestParams : {}
   const toolName = stringValue(payload.tool) ?? stringValue(payload.name)
+  const callId = stringValue(payload.callId) ?? stringValue(payload.call_id)
   const toolInput = 'arguments' in payload
     ? payload.arguments
     : 'input' in payload
@@ -374,6 +472,11 @@ const executeDynamicToolCall = Effect.fn('executeDynamicToolCall')(function* (
 
     return {
       event: 'tool_call',
+      toolName,
+      callId,
+      success: result.success,
+      error: toolErrorMessage(result),
+      result,
       response: dynamicToolResponse(result.success, result),
     }
   }
@@ -388,6 +491,11 @@ const executeDynamicToolCall = Effect.fn('executeDynamicToolCall')(function* (
 
   return {
     event: 'unsupported_tool_call',
+    toolName: toolName ?? 'unknown',
+    callId,
+    success: false,
+    error: result.error.message,
+    result,
     response: dynamicToolResponse(false, result),
   }
 })
@@ -400,6 +508,9 @@ const handleProtocolServerRequest = Effect.fn('handleProtocolServerRequest')(fun
 ): Effect.fn.Return<void, CodexError, LinearTransport> {
   const payload = isRecord(message.params) ? message.params : {}
 
+  const requestTimestamp = yield* Clock.currentTimeMillis
+  yield* emitRuntimeEvent(params, makeProtocolRequestEvent(session, state, message, requestTimestamp))
+
   if (message.method === 'item/tool/call') {
     const result = yield* executeDynamicToolCall(params, message.params)
 
@@ -407,7 +518,8 @@ const handleProtocolServerRequest = Effect.fn('handleProtocolServerRequest')(fun
       id: message.id,
       result: result.response,
     })
-    yield* emitProtocolEvent(session, params, state, result.event, payload)
+    const toolTimestamp = yield* Clock.currentTimeMillis
+    yield* emitRuntimeEvent(params, makeToolCallEvent(session, state, payload, result, toolTimestamp))
     return
   }
 
@@ -518,6 +630,8 @@ const runCodexProtocolTurn = Effect.fn('runCodexProtocolTurn')(function* (
         const request = pendingRequest
         pendingRequest = null
 
+        const responseTimestamp = yield* Clock.currentTimeMillis
+        yield* emitRuntimeEvent(params, makeProtocolResponseEvent(session, state, request, message, responseTimestamp))
         yield* failOnJsonRpcError(message, request.stage, state.sessionId)
 
         if (request.stage === 'initialize') {
@@ -602,6 +716,7 @@ const runCodexProtocolTurn = Effect.fn('runCodexProtocolTurn')(function* (
       Effect.flatMap((nowMs) => {
         pendingRequest = {
           id,
+          method,
           stage,
           deadlineMs: nowMs + params.config.readTimeoutMs,
         }
@@ -610,7 +725,9 @@ const runCodexProtocolTurn = Effect.fn('runCodexProtocolTurn')(function* (
           id,
           method,
           params: requestParams,
-        })
+        }).pipe(
+          Effect.andThen(emitRuntimeEvent(params, makeProtocolClientRequestEvent(session, state, id, method, requestParams, nowMs))),
+        )
       }),
     )
   }
@@ -988,14 +1105,162 @@ function makeEvent(
   usage: TokenUsage | null,
   rateLimits: unknown,
 ): CodexRuntimeEvent {
-  return {
+  const threadId = extractThreadId(payload) ?? threadIdFromSessionId(sessionId)
+  const turnId = extractTurnId(payload) ?? turnIdFromSessionId(sessionId)
+  const base = {
     event,
     timestamp,
     codexAppServerPid: stringValue(payload.pid),
     sessionId,
-    message: stringValue(payload.message),
+    message: redactNullableText(extractMessage(payload)),
     usage,
     rateLimits,
+  }
+
+  if (event === 'session_started') {
+    return {
+      ...base,
+      type: 'session_started',
+      threadId,
+      turnId,
+      rawSessionPath: extractRawSessionPath(payload),
+    }
+  }
+
+  if (event === 'turn/completed') {
+    return {
+      ...base,
+      type: 'turn_completed',
+      status: extractTurnStatus(payload) ?? 'unknown',
+      threadId,
+      turnId,
+      finalAnswer: extractFinalAnswer(payload),
+      rawSessionPath: extractRawSessionPath(payload),
+      details: safeProtocolDetails(payload),
+    }
+  }
+
+  if (event === 'item/agentMessage/delta' || event === 'item/agentMessage/completed' || event === 'agent_message') {
+    return {
+      ...base,
+      type: 'agent_message',
+      text: redactText(extractMessage(payload) ?? ''),
+      threadId,
+      turnId,
+    }
+  }
+
+  return {
+    ...base,
+    type: 'protocol_notification',
+    method: event,
+    threadId,
+    turnId,
+    details: safeProtocolDetails(payload),
+  }
+}
+
+function makeProtocolClientRequestEvent(
+  session: CodexProtocolSession,
+  state: TurnState,
+  id: JsonRpcId,
+  method: string,
+  payload: Record<string, unknown>,
+  timestamp: number,
+): CodexRuntimeEvent {
+  return makeProtocolEnvelopeEvent('protocol_client_request', method, id, session, state, payload, timestamp)
+}
+
+function makeProtocolRequestEvent(
+  session: CodexProtocolSession,
+  state: TurnState,
+  message: JsonRpcRequest,
+  timestamp: number,
+): CodexRuntimeEvent {
+  return makeProtocolEnvelopeEvent(
+    'protocol_request',
+    message.method,
+    message.id,
+    session,
+    state,
+    isRecord(message.params) ? message.params : {},
+    timestamp,
+  )
+}
+
+function makeProtocolResponseEvent(
+  session: CodexProtocolSession,
+  state: TurnState,
+  request: PendingProtocolRequest,
+  message: JsonRpcResponse,
+  timestamp: number,
+): CodexRuntimeEvent {
+  return makeProtocolEnvelopeEvent(
+    'protocol_response',
+    request.method,
+    message.id,
+    session,
+    state,
+    isRecord(message.result) ? message.result : isRecord(message.error) ? message.error : {},
+    timestamp,
+  )
+}
+
+function makeProtocolEnvelopeEvent(
+  type: 'protocol_client_request' | 'protocol_request' | 'protocol_response',
+  method: string,
+  id: JsonRpcId,
+  session: CodexProtocolSession,
+  state: TurnState,
+  payload: Record<string, unknown>,
+  timestamp: number,
+): CodexRuntimeEvent {
+  const threadId = extractThreadId(payload) ?? state.threadId
+  const turnId = extractTurnId(payload) ?? state.turnId
+
+  return {
+    type,
+    event: method,
+    timestamp,
+    codexAppServerPid: session.processId,
+    sessionId: state.sessionId,
+    message: redactNullableText(extractMessage(payload)),
+    usage: state.usage,
+    rateLimits: state.rateLimits,
+    method,
+    protocolId: String(id),
+    threadId,
+    turnId,
+    details: safeProtocolDetails(payload),
+  }
+}
+
+function makeToolCallEvent(
+  session: CodexProtocolSession,
+  state: TurnState,
+  payload: Record<string, unknown>,
+  execution: DynamicToolExecution,
+  timestamp: number,
+): CodexRuntimeEvent {
+  const threadId = extractThreadId(payload) ?? state.threadId
+  const turnId = extractTurnId(payload) ?? state.turnId
+
+  return {
+    type: 'tool_call',
+    event: execution.event,
+    timestamp,
+    codexAppServerPid: session.processId,
+    sessionId: state.sessionId,
+    message: null,
+    usage: state.usage,
+    rateLimits: state.rateLimits,
+    toolName: execution.toolName,
+    callId: execution.callId,
+    success: execution.success,
+    error: redactNullableText(execution.error),
+    threadId,
+    turnId,
+    details: safeToolCallDetails(payload, execution),
   }
 }
 
@@ -1009,6 +1274,17 @@ function extractThreadId(payload: unknown): string | null {
     ?? (isRecord(payload.thread) ? stringValue(payload.thread.id) : null)
 }
 
+function threadIdFromSessionId(sessionId: string | null): string | null {
+  if (sessionId === null) {
+    return null
+  }
+
+  const marker = '-turn-'
+  const markerIndex = sessionId.lastIndexOf(marker)
+
+  return markerIndex === -1 ? sessionId.split('-')[0] ?? null : sessionId.slice(0, markerIndex)
+}
+
 function extractTurnId(payload: unknown): string | null {
   if (!isRecord(payload)) {
     return null
@@ -1019,6 +1295,23 @@ function extractTurnId(payload: unknown): string | null {
     ?? (isRecord(payload.turn) ? stringValue(payload.turn.id) : null)
 }
 
+function turnIdFromSessionId(sessionId: string | null): string | null {
+  if (sessionId === null) {
+    return null
+  }
+
+  const marker = '-turn-'
+  const markerIndex = sessionId.lastIndexOf(marker)
+
+  if (markerIndex !== -1) {
+    return sessionId.slice(markerIndex + 1)
+  }
+
+  const parts = sessionId.split('-')
+
+  return parts.length <= 1 ? null : parts.slice(1).join('-')
+}
+
 function extractTurnStatus(payload: unknown): string | null {
   if (!isRecord(payload)) {
     return null
@@ -1026,6 +1319,42 @@ function extractTurnStatus(payload: unknown): string | null {
 
   return stringValue(payload.status)
     ?? (isRecord(payload.turn) ? stringValue(payload.turn.status) : null)
+}
+
+function extractRawSessionPath(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  return stringValue(payload.rawSessionPath)
+    ?? stringValue(payload.raw_session_path)
+    ?? stringValue(payload.transcriptPath)
+    ?? stringValue(payload.transcript_path)
+    ?? (isRecord(payload.session) ? stringValue(payload.session.path) : null)
+}
+
+function extractFinalAnswer(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  return stringValue(payload.finalAnswer)
+    ?? stringValue(payload.final_answer)
+    ?? stringValue(payload.output)
+    ?? (isRecord(payload.turn) ? stringValue(payload.turn.finalAnswer) ?? stringValue(payload.turn.output) : null)
+}
+
+function extractMessage(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  return stringValue(payload.message)
+    ?? stringValue(payload.text)
+    ?? stringValue(payload.delta)
+    ?? stringValue(payload.content)
+    ?? (isRecord(payload.item) ? extractMessage(payload.item) : null)
+    ?? (isRecord(payload.data) ? extractMessage(payload.data) : null)
 }
 
 function extractTurnFailureReason(payload: unknown): string | null {
@@ -1075,6 +1404,158 @@ function extractUsage(payload: Record<string, unknown>): TokenUsage | null {
 
 function extractRateLimits(payload: Record<string, unknown>): unknown {
   return 'rateLimits' in payload ? payload.rateLimits : payload
+}
+
+function safeProtocolDetails(payload: Record<string, unknown>): Record<string, unknown> {
+  const prompt = extractPromptText(payload)
+
+  return safeRecord({
+    threadId: extractThreadId(payload),
+    turnId: extractTurnId(payload),
+    status: extractTurnStatus(payload),
+    message: redactNullableText(extractMessage(payload)),
+    rawSessionPath: extractRawSessionPath(payload),
+    finalAnswer: redactNullableText(extractFinalAnswer(payload)),
+    promptLength: prompt === null ? null : prompt.length,
+    promptSha256: prompt === null ? null : createHash('sha256').update(prompt).digest('hex'),
+    promptPreview: prompt === null ? null : truncate(redactText(prompt), 2000),
+    toolName: stringValue(payload.tool) ?? stringValue(payload.name),
+    callId: stringValue(payload.callId) ?? stringValue(payload.call_id),
+    path: stringValue(payload.path) ?? stringValue(payload.filePath),
+    operation: stringValue(payload.operation) ?? stringValue(payload.type),
+    files: safeFiles(payload.files),
+    itemType: isRecord(payload.item) ? stringValue(payload.item.type) : null,
+  })
+}
+
+function extractPromptText(payload: Record<string, unknown>): string | null {
+  const direct = stringValue(payload.prompt)
+
+  if (direct !== null) {
+    return direct
+  }
+
+  if (!Array.isArray(payload.input)) {
+    return null
+  }
+
+  return payload.input
+    .map((item) => {
+      if (typeof item === 'string') {
+        return item
+      }
+
+      if (!isRecord(item)) {
+        return null
+      }
+
+      return stringValue(item.text) ?? stringValue(item.content)
+    })
+    .filter((item): item is string => item !== null)
+    .join('\n') || null
+}
+
+function safeToolCallDetails(payload: Record<string, unknown>, execution: DynamicToolExecution): Record<string, unknown> {
+  const toolInput = 'arguments' in payload
+    ? payload.arguments
+    : 'input' in payload
+      ? payload.input
+      : undefined
+
+  return safeRecord({
+    ...safeProtocolDetails(payload),
+    toolName: execution.toolName,
+    callId: execution.callId,
+    input: safeEvidenceValue(toolInput),
+    output: safeEvidenceValue(execution.result),
+  })
+}
+
+function safeFiles(value: unknown): ReadonlyArray<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+
+  return value.flatMap((file) => {
+    if (typeof file === 'string') {
+      return [{ path: file }]
+    }
+
+    if (!isRecord(file)) {
+      return []
+    }
+
+    const path = stringValue(file.path) ?? stringValue(file.filePath)
+
+    if (path === null) {
+      return []
+    }
+
+    return [omitUndefined({
+      path,
+      operation: stringValue(file.operation) ?? stringValue(file.type),
+    })]
+  })
+}
+
+function safeRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return redactUnknown(omitUndefined(value)) as Record<string, unknown>
+}
+
+function safeEvidenceValue(value: unknown, depth = 0): unknown {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (depth > 8) {
+    return '[truncated:depth-limit]'
+  }
+
+  if (typeof value === 'string') {
+    return truncate(redactText(value), 4000)
+  }
+
+  if (typeof value === 'bigint') {
+    return `${String(value)}n`
+  }
+
+  if (typeof value === 'function' || typeof value === 'symbol') {
+    return `[unavailable:${typeof value}]`
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map(item => safeEvidenceValue(item, depth + 1))
+  }
+
+  const output: Record<string, unknown> = {}
+
+  for (const [key, entry] of Object.entries(value).slice(0, 50)) {
+    output[key] = safeEvidenceValue(entry, depth + 1)
+  }
+
+  return redactUnknown(output)
+}
+
+function redactNullableText(value: string | null): string | null {
+  return value === null ? null : redactText(value)
+}
+
+function truncate(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`
+}
+
+function toolErrorMessage(result: unknown): string | null {
+  if (!isRecord(result) || result.success !== false || !isRecord(result.error)) {
+    return null
+  }
+
+  return stringValue(result.error.message)
+    ?? stringValue(result.error.reason)
+    ?? stringValue(result.error.code)
 }
 
 function emptyUsage(): TokenUsage {

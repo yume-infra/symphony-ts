@@ -150,6 +150,7 @@ function issueTemplateValue(issue: Issue): Record<string, unknown> {
     description: issue.description,
     priority: issue.priority,
     state: issue.state,
+    state_type: issue.stateType,
     branch_name: issue.branchName,
     url: issue.url,
     labels: issue.labels,

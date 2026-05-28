@@ -141,6 +141,7 @@ export function issue(overrides: Partial<Issue> = {}): Issue {
     description: null,
     priority: 1,
     state: 'Todo',
+    stateType: null,
     branchName: null,
     url: null,
     labels: [],
@@ -152,7 +153,8 @@ export function issue(overrides: Partial<Issue> = {}): Issue {
 }
 
 function event(overrides: Partial<CodexRuntimeEvent> = {}): CodexRuntimeEvent {
-  return {
+  const base: CodexRuntimeEvent = {
+    type: 'protocol_notification',
     event: 'thread/tokenUsage/updated',
     timestamp: 2000,
     codexAppServerPid: null,
@@ -160,6 +162,14 @@ function event(overrides: Partial<CodexRuntimeEvent> = {}): CodexRuntimeEvent {
     message: null,
     usage: null,
     rateLimits: null,
-    ...overrides,
+    method: 'thread/tokenUsage/updated',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    details: {},
   }
+
+  return {
+    ...base,
+    ...overrides,
+  } as CodexRuntimeEvent
 }

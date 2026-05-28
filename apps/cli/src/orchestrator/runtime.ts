@@ -1,16 +1,19 @@
-import type { CodexAppServerClient } from '../agent-runner/codex.js'
+import type { CodexAppServerClient, CodexRuntimeEvent } from '../agent-runner/codex.js'
 import type { AgentRunResult } from '../agent-runner/runner.js'
 import type { CodexError, ConfigError, PromptRenderError, TrackerError, WorkspaceError } from '../domain/errors.js'
 import type { Issue, ServiceConfig } from '../domain/types.js'
 import type { PromptRenderer } from '../prompt/render.js'
+import type { CleanupSummary } from '../run-evidence/schema.js'
+import type { RunEvidenceService } from '../run-evidence/service.js'
 import type { LinearTransport } from '../tracker/linear.js'
 import type { WorkspaceBestEffortFailure } from '../workspace/manager.js'
 import type { RuntimeState, WorkerExitReason } from './state.js'
-import { Effect } from 'effect'
+import { Cause, Clock, Effect, Exit, Option } from 'effect'
 import { AgentRunner } from '../agent-runner/runner.js'
 import { ConfigResolver } from '../config/resolve.js'
 import { normalizeStateName } from '../domain/types.js'
 import { RuntimeLogger } from '../observability/logging.js'
+import { RunEvidenceService as RunEvidenceServiceTag } from '../run-evidence/service.js'
 import { TrackerClient } from '../tracker/linear.js'
 import { WorkspaceManager, workspacePathFor } from '../workspace/manager.js'
 import { failureRetryDelayMs, isDispatchEligible, OrchestratorState, removeRunningForReconciliation, sortCandidates } from './state.js'
@@ -113,6 +116,7 @@ const handleWorkerSuccessEffect = Effect.fn('handleWorkerSuccessEffect')(functio
   result: AgentRunResult,
   config: ServiceConfig,
   nowMs: number,
+  cleanupEnabled: boolean,
 ): Effect.fn.Return<void, never, OrchestratorState | WorkspaceManager | RuntimeLogger> {
   if (isTerminal(result.issue, config)) {
     const state = yield* OrchestratorState
@@ -120,6 +124,17 @@ const handleWorkerSuccessEffect = Effect.fn('handleWorkerSuccessEffect')(functio
     const logger = yield* RuntimeLogger
     const current = yield* state.get
     yield* state.set(removeRunningForReconciliation(current, result.issue.id, true))
+
+    if (!cleanupEnabled) {
+      yield* logger.warn('workspace_cleanup_skipped', {
+        issue_id: result.issue.id,
+        issue_identifier: result.issue.identifier,
+        workspace_path: result.workspace.path,
+        reason: 'run evidence was not written',
+      })
+      return
+    }
+
     yield* workspace.removeForIssueBestEffort(
       result.issue.identifier,
       config.workspace,
@@ -147,29 +162,44 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
 ): Effect.fn.Return<
   void,
   PollTickError,
-  OrchestratorState | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | TrackerClient | LinearTransport | RuntimeLogger
+  | OrchestratorState
+  | AgentRunner
+  | WorkspaceManager
+  | PromptRenderer
+  | CodexAppServerClient
+  | TrackerClient
+  | LinearTransport
+  | RuntimeLogger
+  | RunEvidenceService
 > {
   const state = yield* OrchestratorState
   const runner = yield* AgentRunner
   const logger = yield* RuntimeLogger
+  const evidence = yield* RunEvidenceServiceTag
+  const workspacePath = workspacePathFor(config.workspace.root, issue.identifier)
   const marked = yield* state.tryMarkRunning(
     issue,
     config,
     options.nowMs,
     attempt,
-    workspacePathFor(config.workspace.root, issue.identifier),
+    workspacePath,
   )
 
   if (!marked) {
     return
   }
 
+  const codexEvents: Array<CodexRuntimeEvent> = []
+  const workspaceFailures: Array<WorkspaceBestEffortFailure> = []
   const worker = runner.runAttempt({
     issue,
     attempt,
     config,
     onCodexEvent: event =>
-      state.recordCodexEvent(issue.id, event).pipe(
+      Effect.sync(() => {
+        codexEvents.push(event)
+      }).pipe(
+        Effect.andThen(state.recordCodexEvent(issue.id, event)),
         Effect.andThen(logger.info('codex_event', {
           issue_id: issue.id,
           issue_identifier: issue.identifier,
@@ -183,28 +213,72 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
         })),
       ),
     onWorkspaceBestEffortFailure: failure =>
-      logger.warn('workspace_after_run_failed', workspaceBestEffortFailureContext(issue, failure)),
-  }).pipe(
-    Effect.matchEffect({
-      onFailure: error =>
-        logger.warn('worker_failed', workerFailureContext(issue, error)).pipe(
-          Effect.andThen(handleWorkerExitEffect(
-            issue,
-            { _tag: 'failed', error: describeWorkerError(error) },
-            config,
-            options.nowMs,
-          )),
-        ),
-      onSuccess: result => handleWorkerSuccessEffect(result, config, options.nowMs),
-    }),
-  )
+      Effect.sync(() => {
+        workspaceFailures.push(failure)
+      }).pipe(
+        Effect.andThen(logger.warn('workspace_after_run_failed', workspaceBestEffortFailureContext(issue, failure))),
+      ),
+  })
+  const workerWithEvidence = Effect.gen(function* () {
+    const workerExit = yield* Effect.exit(worker)
+    const completedAtMs = yield* Clock.currentTimeMillis
+    const evidenceIssue = Exit.isSuccess(workerExit) ? workerExit.value.issue : issue
+    const evidenceWorkspacePath = Exit.isSuccess(workerExit) ? workerExit.value.workspace.path : workspacePath
+    const cleanup = cleanupPlan(workerExit, config)
+    const evidenceExit = yield* Effect.exit(evidence.writeAttempt({
+      issue: evidenceIssue,
+      attempt,
+      config,
+      workspacePath: evidenceWorkspacePath,
+      startedAtMs: options.nowMs,
+      completedAtMs,
+      workerExit,
+      codexEvents,
+      workspaceFailures,
+      cleanup,
+    }))
+    const evidenceWritten = Exit.isSuccess(evidenceExit)
+
+    if (evidenceWritten) {
+      yield* logger.info('run_evidence_written', {
+        issue_id: evidenceIssue.id,
+        issue_identifier: evidenceIssue.identifier,
+        evidence_path: evidenceExit.value.directory,
+      })
+    }
+    else {
+      yield* logger.warn('run_evidence_write_failed', {
+        issue_id: evidenceIssue.id,
+        issue_identifier: evidenceIssue.identifier,
+        error_code: firstEvidenceErrorCode(evidenceExit),
+        reason: describeEvidenceFailure(evidenceExit),
+      })
+    }
+
+    if (Exit.isSuccess(workerExit)) {
+      yield* handleWorkerSuccessEffect(workerExit.value, config, options.nowMs, evidenceWritten)
+      return
+    }
+
+    const typedError = firstWorkerTypedError(workerExit)
+
+    yield* logger.warn('worker_failed', typedError === null
+      ? workerExitFailureContext(issue, workerExit)
+      : workerFailureContext(issue, typedError))
+    yield* handleWorkerExitEffect(
+      issue,
+      { _tag: 'failed', error: describeWorkerExit(workerExit) },
+      config,
+      options.nowMs,
+    )
+  })
 
   if (options.launchMode === 'inline') {
-    yield* worker
+    yield* workerWithEvidence
     return
   }
 
-  yield* Effect.forkChild(worker, { startImmediately: true })
+  yield* Effect.forkChild(workerWithEvidence, { startImmediately: true })
 })
 
 const processDueRetries = Effect.fn('processDueRetries')(function* (
@@ -213,7 +287,15 @@ const processDueRetries = Effect.fn('processDueRetries')(function* (
 ): Effect.fn.Return<
   void,
   PollTickError,
-  OrchestratorState | TrackerClient | AgentRunner | WorkspaceManager | PromptRenderer | CodexAppServerClient | LinearTransport | RuntimeLogger
+  | OrchestratorState
+  | TrackerClient
+  | AgentRunner
+  | WorkspaceManager
+  | PromptRenderer
+  | CodexAppServerClient
+  | LinearTransport
+  | RuntimeLogger
+  | RunEvidenceService
 > {
   const state = yield* OrchestratorState
   const tracker = yield* TrackerClient
@@ -270,6 +352,7 @@ export const pollTick = Effect.fn('pollTick')(function* (
   | CodexAppServerClient
   | LinearTransport
   | RuntimeLogger
+  | RunEvidenceService
 > {
   const resolver = yield* ConfigResolver
   const tracker = yield* TrackerClient
@@ -387,6 +470,101 @@ function workspaceBestEffortFailureContext(issue: Issue, failure: WorkspaceBestE
     hook: failure.error.hook,
     reason: failure.error.reason,
   }
+}
+
+function cleanupPlan(
+  workerExit: Exit.Exit<AgentRunResult, WorkerRunError>,
+  config: ServiceConfig,
+): CleanupSummary {
+  if (!Exit.isSuccess(workerExit)) {
+    return {
+      outcome: 'skipped',
+      reason: 'worker did not complete successfully',
+    }
+  }
+
+  if (isTerminal(workerExit.value.issue, config)) {
+    return {
+      outcome: 'planned',
+      reason: 'terminal issue cleanup runs after evidence write',
+    }
+  }
+
+  return {
+    outcome: 'not_attempted',
+    reason: 'issue is not terminal',
+  }
+}
+
+function firstWorkerTypedError(exit: Exit.Exit<AgentRunResult, WorkerRunError>): WorkerRunError | null {
+  if (Exit.isSuccess(exit)) {
+    return null
+  }
+
+  const error = Cause.findErrorOption(exit.cause)
+
+  return Option.isSome(error) ? error.value : null
+}
+
+function describeWorkerExit(exit: Exit.Exit<AgentRunResult, WorkerRunError>): string {
+  if (Exit.isSuccess(exit)) {
+    return 'worker completed successfully'
+  }
+
+  const typedError = firstWorkerTypedError(exit)
+
+  if (typedError !== null) {
+    return describeWorkerError(typedError)
+  }
+
+  return Cause.pretty(exit.cause)
+}
+
+function workerExitFailureContext(issue: Issue, exit: Exit.Exit<AgentRunResult, WorkerRunError>) {
+  return {
+    issue_id: issue.id,
+    issue_identifier: issue.identifier,
+    error_code: Exit.isFailure(exit) && Cause.hasDies(exit.cause) ? 'defect' : 'unknown_failure',
+    reason: describeWorkerExit(exit),
+  }
+}
+
+function firstEvidenceErrorCode(exit: Exit.Exit<unknown, unknown>): string {
+  if (Exit.isSuccess(exit)) {
+    return 'none'
+  }
+
+  const error = Cause.findErrorOption(exit.cause)
+
+  if (Option.isSome(error) && typeof error.value === 'object' && error.value !== null && 'code' in error.value) {
+    return String(error.value.code)
+  }
+
+  if (Cause.hasDies(exit.cause)) {
+    return 'defect'
+  }
+
+  return 'unknown_failure'
+}
+
+function describeEvidenceFailure(exit: Exit.Exit<unknown, unknown>): string {
+  if (Exit.isSuccess(exit)) {
+    return 'evidence written'
+  }
+
+  const error = Cause.findErrorOption(exit.cause)
+
+  if (Option.isSome(error)) {
+    const value = error.value
+
+    if (typeof value === 'object' && value !== null && 'reason' in value) {
+      return String(value.reason)
+    }
+
+    return String(value)
+  }
+
+  return Cause.pretty(exit.cause)
 }
 
 function describeWorkerError(error: WorkerRunError): string {

@@ -108,13 +108,13 @@ query SymphonyCandidateIssues($projectSlug: String!, $activeStates: [String!], $
       url
       createdAt
       updatedAt
-      state { name }
+      state { name type }
       labels { nodes { name } }
       inverseRelations {
         nodes {
           type
-          issue { id identifier state { name } }
-          relatedIssue { id identifier state { name } }
+          issue { id identifier state { name type } }
+          relatedIssue { id identifier state { name type } }
         }
       }
     }
@@ -143,13 +143,13 @@ query SymphonyIssuesByStates($projectSlug: String!, $stateNames: [String!], $aft
       url
       createdAt
       updatedAt
-      state { name }
+      state { name type }
       labels { nodes { name } }
       inverseRelations {
         nodes {
           type
-          issue { id identifier state { name } }
-          relatedIssue { id identifier state { name } }
+          issue { id identifier state { name type } }
+          relatedIssue { id identifier state { name type } }
         }
       }
     }
@@ -171,13 +171,13 @@ query SymphonyIssueStatesByIds($ids: [ID!]) {
       url
       createdAt
       updatedAt
-      state { name }
+      state { name type }
       labels { nodes { name } }
       inverseRelations {
         nodes {
           type
-          issue { id identifier state { name } }
-          relatedIssue { id identifier state { name } }
+          issue { id identifier state { name type } }
+          relatedIssue { id identifier state { name type } }
         }
       }
     }
@@ -373,6 +373,7 @@ export function normalizeLinearIssue(value: unknown): Issue | null {
   const identifier = stringField(value.identifier)
   const title = stringField(value.title)
   const state = normalizeLinearState(value.state)
+  const stateType = normalizeLinearStateType(value.state)
 
   if (id === null || identifier === null || title === null || state === null) {
     return null
@@ -385,6 +386,7 @@ export function normalizeLinearIssue(value: unknown): Issue | null {
     description: nullableString(value.description),
     priority: Number.isInteger(value.priority) ? value.priority as number : null,
     state,
+    stateType,
     branchName: nullableString(value.branchName),
     url: nullableString(value.url),
     labels: normalizeLabels(value.labels),
@@ -456,6 +458,14 @@ function normalizeLinearState(value: unknown): string | null {
   }
 
   return null
+}
+
+function normalizeLinearStateType(value: unknown): string | null {
+  if (!isPlainRecord(value)) {
+    return null
+  }
+
+  return stringField(value.type)
 }
 
 function normalizeTimestamp(value: unknown): string | null {

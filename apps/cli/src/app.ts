@@ -7,6 +7,7 @@ import { RuntimeLogger, RuntimeLoggerLive } from './observability/logging.js'
 import { pollTick, startupTerminalWorkspaceCleanup } from './orchestrator/runtime.js'
 import { OrchestratorStateLive } from './orchestrator/state.js'
 import { PromptRendererLive } from './prompt/render.js'
+import { RunEvidenceServiceLive } from './run-evidence/service.js'
 import { LinearTrackerClientLive, LinearTransportLive } from './tracker/linear.js'
 import { WorkflowLoaderLive } from './workflow/loader.js'
 import { WorkflowRuntime, WorkflowRuntimeLive } from './workflow/runtime.js'
@@ -27,6 +28,7 @@ export function AppLive(workflowPath: string | undefined) {
     workflowRuntime,
     ConfigResolverLive,
     RuntimeLoggerLive,
+    RunEvidenceServiceLive,
     OrchestratorStateLive,
     WorkspaceManagerLive,
     PromptRendererLive,
