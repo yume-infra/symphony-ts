@@ -31,10 +31,11 @@ const ServiceLive = Layer.effect(Service)(
 )
 ```
 
-Provide `NodeHttpClient.layerFetch`, `NodeHttpClient.layerUndici`, or
-`NodeHttpClient.layerNodeHttp` at application composition. Prefer one live
-choice at the boundary instead of reaching for global fetch inside service
-methods.
+Provide `NodeHttpClient.layerUndici` at application composition for production
+Linear traffic. A real run found the installed beta fetch-backed Node client
+incompatible with this request body's `content-length` behavior on the current
+Node/undici stack. Tests should still substitute the client with
+`Layer.succeed`.
 
 ## Requests And JSON
 

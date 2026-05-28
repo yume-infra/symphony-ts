@@ -29,7 +29,7 @@ service contract while internally using:
 - `HttpClient.execute`;
 - `HttpClientResponse.json`.
 
-`AppLive` provides `NodeHttpClient.layerFetch` to the Linear transport layer.
+`AppLive` provides `NodeHttpClient.layerUndici` to the Linear transport layer.
 Tests use `HttpClient.make` to verify request construction without global
 network access.
 
@@ -39,9 +39,11 @@ network access.
 - Linear transport can be tested by swapping an Effect `HttpClient`.
 - HTTP transport and response decode failures still map to `TrackerError` with
   the original error preserved as `cause`.
-- The chosen live implementation is the fetch-backed Node client for now. If
-  connection pooling, proxying, or dispatcher-level options become important,
-  switch `AppLive` to `NodeHttpClient.layerUndici` with an ADR update.
+- A real Linear run on 2026-05-28 showed the installed beta fetch-backed Node
+  client forwarding `content-length` in a way Node/undici rejected as
+  `invalid content-length header`. `NodeHttpClient.layerUndici` produced normal
+  Linear HTTP responses for the same request shape, so it is the live production
+  layer for Linear traffic.
 
 ## Evidence
 

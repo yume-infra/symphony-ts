@@ -17,7 +17,7 @@ export function AppLive(workflowPath: string | undefined) {
     Layer.provide(Layer.mergeAll(WorkflowLoaderLive, ConfigResolverLive)),
   )
   const linearTransport = LinearTransportLive.pipe(
-    Layer.provide(NodeHttpClient.layerFetch),
+    Layer.provide(NodeHttpClient.layerUndici),
   )
   const trackerClient = LinearTrackerClientLive.pipe(
     Layer.provide(linearTransport),

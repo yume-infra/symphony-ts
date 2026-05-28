@@ -27,6 +27,8 @@ Symphony-specific rules still control:
 - Include issue-identifying metadata when supported.
 - Treat Codex config values such as approval and sandbox settings as pass-through values for the
   targeted schema unless a local validator is explicitly added.
+- Sanitize runtime-only secrets, including `LINEAR_API_KEY`, from the app-server child-process
+  environment. Coding agents should use advertised client-side tools, not raw tracker credentials.
 - Use a safe max-line-size policy for protocol buffering.
 
 ## Session Handling
@@ -65,6 +67,8 @@ Keep diagnostic stderr handling separate from protocol stream handling when usin
 ## Dynamic Tool Handling
 
 - Advertise implemented client-side tools during session startup using the targeted protocol.
+- For the current Codex schema, advertise `linear_graphql` in `thread/start.dynamicTools`; do not
+  assume an existing thread can be retrofitted by prompt text alone.
 - Handle supported dynamic tools according to their extension contract.
 - Return a targeted-protocol tool failure for unsupported tool names.
 - Do not let unsupported tool calls stall the session.

@@ -194,6 +194,8 @@ Best-effort hooks：
 它返回 structured success/failure，不直接抛给 app-server。
 
 它使用 Symphony runtime config 中的 Linear auth，所以 Codex worker 不需要读取 raw API key。
+`codex app-server` 子进程会清空继承来的 `LINEAR_API_KEY`，避免 worker 通过 shell/env 路径拿到
+tracker token。
 
 ## 当前高信任实现的实际含义
 

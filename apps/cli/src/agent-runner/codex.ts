@@ -116,6 +116,29 @@ const CLIENT_INFO = {
   version: '0.0.0',
 } as const
 
+const LINEAR_GRAPHQL_DYNAMIC_TOOL = {
+  name: 'linear_graphql',
+  description: [
+    'Execute one Linear GraphQL query or mutation through the Symphony runtime Linear transport.',
+    'Input must be { "query": string, "variables"?: object }.',
+    'Use this tool instead of shell network calls or environment inspection; the worker never needs LINEAR_API_KEY.',
+  ].join(' '),
+  inputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['query'],
+    properties: {
+      query: {
+        type: 'string',
+      },
+      variables: {
+        type: 'object',
+        additionalProperties: true,
+      },
+    },
+  },
+} as const
+
 const MAX_PROTOCOL_LINE_BYTES = 10 * 1024 * 1024
 const JSON_RPC_APPLICATION_ERROR = -32000
 const JSON_RPC_METHOD_NOT_FOUND = -32601
@@ -611,6 +634,10 @@ const makeCodexProcessSession = Effect.fn('makeCodexProcessSession')(function* (
   const stderrTail = yield* Ref.make('')
   const command = ChildProcess.make('bash', ['-lc', params.command], {
     cwd: params.cwd,
+    env: {
+      LINEAR_API_KEY: '',
+    },
+    extendEnv: true,
     stdin: {
       stream: Stream.fromQueue(outbound),
       endOnDone: false,
@@ -782,7 +809,9 @@ function threadRequestMethod(params: CodexRunParams): 'thread/resume' | 'thread/
 
 function threadRequestParams(params: CodexRunParams): Record<string, unknown> {
   return omitUndefined({
-    ...(params.threadId === null ? {} : { threadId: params.threadId }),
+    ...(params.threadId === null
+      ? { dynamicTools: [LINEAR_GRAPHQL_DYNAMIC_TOOL] }
+      : { threadId: params.threadId }),
     cwd: params.cwd,
     approvalPolicy: params.config.approvalPolicy,
     sandbox: params.config.threadSandbox,

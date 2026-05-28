@@ -1,0 +1,63 @@
+{
+  "issueIdentifier": "SAY-8",
+  "issueId": "eb108043-095c-4ed0-a7bd-3f77311a8183",
+  "issueUrl": "https://linear.app/sayoriqwq/issue/SAY-8/新测试",
+  "project": {
+    "name": "symphony test",
+    "slugId": "8e28f62fb2e9"
+  },
+  "workflowPath": ".trellis/workspace/sayoriqwq/real-flow-2026-05-28-say-8/WORKFLOW.md",
+  "startedAt": "2026-05-28T09:14:38Z",
+  "finishedAt": "2026-05-28T09:15:10Z",
+  "stateTimeline": [
+    {
+      "state": "Todo",
+      "stateId": "b64833cd-28ba-440c-b016-c21ef8c9707c",
+      "observedAt": "2026-05-28T09:14:38Z"
+    },
+    {
+      "state": "In Progress",
+      "stateId": "b52852d8-9205-4d7a-8b91-2be6f86b4f7d",
+      "evidence": "linear_graphql dynamic tool call succeeded"
+    },
+    {
+      "state": "Done",
+      "stateId": "700b91aa-596e-49df-95ff-414cf8d62ae4",
+      "linearUpdatedAt": "2026-05-28T09:15:08.888Z"
+    }
+  ],
+  "codex": {
+    "pid": "83479",
+    "sessionId": "019e6ddd-4af2-77e3-9a01-fec87cfef29b-019e6ddd-4b5b-71a0-aa9f-6c2bdf905437",
+    "dynamicToolsAdvertised": true,
+    "linearGraphQLToolCalls": 2,
+    "turnCompleted": true,
+    "finalTokenUsage": {
+      "inputTokens": 77876,
+      "outputTokens": 876,
+      "totalTokens": 78752
+    }
+  },
+  "hooks": {
+    "beforeRun": true,
+    "afterRun": true,
+    "beforeRemove": true,
+    "acceptanceFileCopied": true,
+    "workspaceRemoved": true
+  },
+  "acceptance": {
+    "marker": "SYMPHONY_SAY_8_ACCEPTANCE_OK",
+    "afterRunCopy": "events/acceptance-result.txt",
+    "beforeRemoveCopy": "events/acceptance-result.before-remove.txt"
+  },
+  "checks": {
+    "linearFinalStateDone": true,
+    "dynamicToolUsedForBothLinearMutations": true,
+    "rawLinearTokenScanPassed": true,
+    "pass": true
+  },
+  "notes": [
+    "The first 2026-05-28 attempt exposed that the worker could not see linear_graphql because thread/start did not advertise dynamicTools.",
+    "The successful rerun advertised linear_graphql through thread/start.dynamicTools and sanitized LINEAR_API_KEY from the app-server child environment."
+  ]
+}

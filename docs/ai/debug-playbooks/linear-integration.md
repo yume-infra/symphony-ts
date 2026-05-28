@@ -59,6 +59,11 @@ If implemented, `linear_graphql` is a client-side tool exposed through the agent
 - preserve top-level GraphQL errors in the response body
 - never expose raw tokens
 
+If a real worker tries to discover `LINEAR_API_KEY`, call `curl`, or look for a local
+`linear_graphql` executable, debug the Codex app-server dynamic tool advertisement first. The
+worker should see `linear_graphql` as an app-server client-side tool; the raw key stays in the
+Symphony runtime process.
+
 Do not move tracker write business logic into the orchestrator without a project decision.
 
 ## Required Evidence For Updates

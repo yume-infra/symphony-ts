@@ -159,6 +159,14 @@ describe('codex app-server boundary', () => {
           approvalPolicy: 'never',
           sandbox: 'workspace-write',
           serviceName: 'symphony-ts',
+          dynamicTools: [
+            {
+              name: 'linear_graphql',
+              inputSchema: {
+                required: ['query'],
+              },
+            },
+          ],
         },
       })
       expect(recordAt(script.sentMessages, 1).params).not.toHaveProperty('tools')
@@ -209,6 +217,7 @@ describe('codex app-server boundary', () => {
           cwd: '/tmp/symphony/SYM-1',
         },
       })
+      expect(recordAt(script.sentMessages, 1).params).not.toHaveProperty('dynamicTools')
     }))
 
   it.effect('rejects app-server launch when cwd is not the issue workspace', () =>
@@ -387,8 +396,11 @@ describe('codex app-server boundary', () => {
       workspace =>
         Effect.gen(function* () {
           const events: Array<string> = []
+          const envStatuses: Array<string | null> = []
           const processIds: Array<string | null> = []
           const fake = fakeLinear([])
+          const previousLinearApiKey = process.env.LINEAR_API_KEY
+          process.env.LINEAR_API_KEY = 'parent-linear-secret'
           const result = yield* Effect.gen(function* () {
             const client = yield* CodexAppServerClient
 
@@ -399,10 +411,23 @@ describe('codex app-server boundary', () => {
               workspacePath: workspace.path,
               onEvent: event => Effect.sync(() => {
                 events.push(event.event)
+                if (event.event === 'symphony/test/env') {
+                  envStatuses.push(event.message)
+                }
                 processIds.push(event.codexAppServerPid)
               }),
             })
-          }).pipe(Effect.provide(Layer.merge(CodexAppServerClientLive, fake.layer)))
+          }).pipe(
+            Effect.provide(Layer.merge(CodexAppServerClientLive, fake.layer)),
+            Effect.ensuring(Effect.sync(() => {
+              if (previousLinearApiKey === undefined) {
+                delete process.env.LINEAR_API_KEY
+              }
+              else {
+                process.env.LINEAR_API_KEY = previousLinearApiKey
+              }
+            })),
+          )
 
           expect(result).toMatchObject({
             sessionId: 'thread-process-turn-process',
@@ -416,9 +441,11 @@ describe('codex app-server boundary', () => {
           })
           expect(events).toEqual([
             'session_started',
+            'symphony/test/env',
             'thread/tokenUsage/updated',
             'turn/completed',
           ])
+          expect(envStatuses).toEqual(['absent'])
           expect(processIds.every(processId => processId !== null)).toBe(true)
           expect(fake.requests).toHaveLength(0)
         }),
@@ -544,6 +571,14 @@ rl.on("line", (line) => {
           id: "turn-process",
           status: "inProgress"
         }
+      }
+    });
+    send({
+      method: "symphony/test/env",
+      params: {
+        threadId: "thread-process",
+        turnId: "turn-process",
+        message: process.env.LINEAR_API_KEY ? "present" : "absent"
       }
     });
     send({
