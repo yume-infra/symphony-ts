@@ -16,7 +16,22 @@ tsgo. It does not mean the standalone language-service package should be install
 - Treat `floatingEffect` as an error in `src/**/*.ts`.
 - Keep Effect warnings and errors affecting the typecheck exit code.
 - Suggestions may be visible without failing typecheck.
+- Do not leave recurring `tsgo` suggestions as ambient noise. Either fix the pattern, document why it
+  is intentionally tolerated, or promote the repository preference into a local lint rule.
 - Run `effect-tsgo patch` after install/prepare so native-preview uses the Effect-enhanced binary.
+
+## Local Lint Feedback
+
+The root ESLint config contains local Effect rules for agent feedback. Keep these rules focused on
+patterns that repeatedly cause unsafe or stale Effect code:
+
+- no imports from `repos/effect` or legacy `@effect/cli`
+- no new `Context.Tag` service definitions
+- no `Effect.ignore`, `Effect.catchAllCause`, `Effect.serviceOption`, or `Effect.asVoid`
+- no catch handlers that silently return `Effect.void` or `Effect.unit`
+
+When a new Effect anti-pattern appears more than once, prefer adding a targeted lint rule over
+relying on prompt memory.
 
 ## LLM Coding Baseline
 
@@ -98,6 +113,8 @@ not devolve into broad source spelunking.
 - Reintroducing `@effect/cli` for CLI code -> v3 peer dependency regression.
 - Using `NodeContext.layer` for new code -> stale v3 platform pattern.
 - Using `Context.Tag` for new services -> stale service-definition pattern.
+- Using `Effect.ignore`, `Effect.catchAllCause`, `Effect.serviceOption`, or a silent `Effect.void`
+  catch handler -> local lint failure.
 - Skipping `tsgo`/verify before reporting completion -> diagnostics-loop failure.
 
 ### 5. Good/Base/Bad Cases

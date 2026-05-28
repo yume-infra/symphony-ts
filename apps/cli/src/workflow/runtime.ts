@@ -94,17 +94,22 @@ export function WorkflowRuntimeLive(workflowPath: string | undefined): Layer.Lay
         getConfig: Ref.get(ref).pipe(Effect.map(snapshot => snapshot.config)),
         reload,
         watch: onReload =>
-          Effect.callback<void>((resume) => {
-            const watcher = watch(initialConfig.workflowPath, () => {
-              Effect.runPromise(reload.pipe(
-                Effect.flatMap(result => onReload?.(result) ?? Effect.void),
-              )).catch(() => undefined)
-            })
+          Effect.gen(function* () {
+            const context = yield* Effect.context<never>()
 
-            resume(Effect.never)
+            return yield* Effect.callback<void>((resume) => {
+              const runPromise = Effect.runPromiseWith(context)
+              const watcher = watch(initialConfig.workflowPath, () => {
+                runPromise(reload.pipe(
+                  Effect.flatMap(result => onReload?.(result) ?? Effect.void),
+                )).catch(() => undefined)
+              })
 
-            return Effect.sync(() => {
-              watcher.close()
+              resume(Effect.never)
+
+              return Effect.sync(() => {
+                watcher.close()
+              })
             })
           }),
       }

@@ -1,5 +1,5 @@
 import type { Issue, ServiceConfig } from '../domain/types.js'
-import { Context, Effect, Layer } from 'effect'
+import { Context, Effect, Layer, Schema } from 'effect'
 import { TrackerError } from '../domain/errors.js'
 import { isPlainRecord } from '../domain/types.js'
 
@@ -25,59 +25,82 @@ export class LinearTransport extends Context.Service<LinearTransport, LinearTran
   'symphony/LinearTransport',
 ) {}
 
+const encodeGraphQLRequestBody = Schema.encodeUnknownEffect(Schema.UnknownFromJsonString)
+
 export const LinearTransportLive = Layer.succeed(LinearTransport)({
   execute: request =>
-    Effect.tryPromise({
-      try: async () => {
-        const response = await fetch(request.endpoint, {
-          method: 'POST',
-          headers: {
-            'authorization': request.apiKey,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            query: request.query,
-            variables: request.variables ?? {},
-          }),
-        })
+    Effect.gen(function* () {
+      const body = yield* encodeGraphQLRequestBody({
+        query: request.query,
+        variables: request.variables ?? {},
+      }).pipe(
+        Effect.mapError(cause => linearRequestError(cause)),
+      )
 
-        return {
-          status: response.status,
-          body: await response.json(),
-        }
-      },
-      catch: cause => new TrackerError({
-        code: 'linear_api_request',
-        operation: 'linear_graphql',
-        reason: 'Linear GraphQL request failed',
-        cause,
-      }),
+      return yield* Effect.tryPromise({
+        try: async () => {
+          const response = await fetch(request.endpoint, {
+            method: 'POST',
+            headers: {
+              'authorization': request.apiKey,
+              'content-type': 'application/json',
+            },
+            body,
+          })
+
+          return {
+            status: response.status,
+            body: await response.json(),
+          }
+        },
+        catch: cause => linearRequestError(cause),
+      })
     }),
 })
 
 export interface TrackerClientShape {
   readonly fetchCandidateIssues: (
     config: ServiceConfig,
-  ) => Effect.Effect<ReadonlyArray<Issue>, TrackerError, LinearTransport>
+  ) => Effect.Effect<ReadonlyArray<Issue>, TrackerError>
   readonly fetchIssuesByStates: (
     config: ServiceConfig,
     stateNames: ReadonlyArray<string>,
-  ) => Effect.Effect<ReadonlyArray<Issue>, TrackerError, LinearTransport>
+  ) => Effect.Effect<ReadonlyArray<Issue>, TrackerError>
   readonly fetchIssueStatesByIds: (
     config: ServiceConfig,
     issueIds: ReadonlyArray<string>,
-  ) => Effect.Effect<ReadonlyArray<Issue>, TrackerError, LinearTransport>
+  ) => Effect.Effect<ReadonlyArray<Issue>, TrackerError>
 }
 
 export class TrackerClient extends Context.Service<TrackerClient, TrackerClientShape>()(
   'symphony/TrackerClient',
 ) {}
 
-export const LinearTrackerClientLive = Layer.succeed(TrackerClient)({
-  fetchCandidateIssues,
-  fetchIssuesByStates,
-  fetchIssueStatesByIds,
-})
+export const LinearTrackerClientLive = Layer.effect(TrackerClient)(
+  Effect.gen(function* () {
+    const transport = yield* LinearTransport
+    const provideTransport = <A>(
+      effect: Effect.Effect<A, TrackerError, LinearTransport>,
+    ): Effect.Effect<A, TrackerError> => effect.pipe(
+      Effect.provideService(LinearTransport, transport),
+    )
+
+    return TrackerClient.of({
+      fetchCandidateIssues: config => provideTransport(fetchCandidateIssues(config)),
+      fetchIssuesByStates: (config, stateNames) => provideTransport(fetchIssuesByStates(config, stateNames)),
+      fetchIssueStatesByIds: (config, issueIds) => provideTransport(fetchIssueStatesByIds(config, issueIds)),
+    })
+  }),
+)
+
+function linearRequestError(cause: unknown): TrackerError {
+  return new TrackerError({
+    code: 'linear_api_request',
+    operation: 'linear_graphql',
+    reason: 'Linear GraphQL request failed',
+    cause,
+  })
+}
 
 const CANDIDATE_ISSUES_QUERY = `
 query SymphonyCandidateIssues($projectSlug: String!, $activeStates: [String!], $after: String) {

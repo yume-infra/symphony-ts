@@ -31,6 +31,8 @@ surface.
 ## Policy
 
 - Treat `floatingEffect` as an error in `src/**/*.ts`.
+- Keep `tsgo` suggestion output empty when practical. If a suggestion is intentionally tolerated,
+  record the reason near the owning spec or goal evidence.
 - Do not install standalone `@effect/language-service`.
 - The `tsconfig.json` plugin entry named `@effect/language-service` configures
   diagnostics for `tsgo`; it is not a package dependency request.
@@ -38,6 +40,18 @@ surface.
   confirm with the vendored subtree source or official docs.
 - Keep examples in docs aligned with `tsgo` before turning them into runtime
   modules.
+
+## Local ESLint Rules
+
+The root `eslint.config.mjs` includes project-local Effect rules for stale or unsafe patterns:
+
+- no imports from `repos/effect` or `@effect/cli`
+- no new `Context.Tag` services
+- no `Effect.ignore`, `Effect.catchAllCause`, `Effect.serviceOption`, or `Effect.asVoid`
+- no catch handlers that silently return `Effect.void` or `Effect.unit`
+
+Add similarly narrow rules when a repeated agent mistake is easier to catch mechanically than by
+prompting.
 
 ## Agent Loop
 

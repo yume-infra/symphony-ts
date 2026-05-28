@@ -26,8 +26,9 @@ pnpm smoke:bin
 
 Use `pnpm smoke:bin` when CLI behavior or packaging changes.
 
-Vitest should be added before broad runtime implementation so deterministic conformance tests can be
-written alongside features rather than after the fact.
+`pnpm lint` includes local Effect anti-pattern rules in addition to the shared Antfu config. These
+rules are part of the agent feedback loop, not style-only checks: do not bypass them without adding a
+specific spec note.
 
 ## Dependency Freshness
 

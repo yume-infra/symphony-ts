@@ -15,6 +15,9 @@ export function AppLive(workflowPath: string | undefined) {
   const workflowRuntime = WorkflowRuntimeLive(workflowPath).pipe(
     Layer.provide(Layer.mergeAll(WorkflowLoaderLive, ConfigResolverLive)),
   )
+  const trackerClient = LinearTrackerClientLive.pipe(
+    Layer.provide(LinearTransportLive),
+  )
 
   return Layer.mergeAll(
     workflowRuntime,
@@ -24,7 +27,7 @@ export function AppLive(workflowPath: string | undefined) {
     WorkspaceManagerLive,
     PromptRendererLive,
     LinearTransportLive,
-    LinearTrackerClientLive,
+    trackerClient,
     CodexAppServerClientLive,
     AgentRunnerLive,
   )

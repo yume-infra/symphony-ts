@@ -111,14 +111,17 @@
 - Effect services + layers。
 - typed errors。
 - `tsgo --noEmit` typecheck 通过。
+- 前一轮 `tsgo` suggestions 已收敛：
+  - `tracker/linear.ts` 的 GraphQL request body 使用 `Schema.UnknownFromJsonString` 编码。
+  - `TrackerClient` 在 `LinearTrackerClientLive` layer 创建时闭包捕获 `LinearTransport`，不再把
+    transport requirement 泄漏到 public service surface。
+  - `workflow/runtime.ts` 的 watcher callback 使用 `Effect.context` + `Effect.runPromiseWith`
+    继承当前 Effect context。
+- ESLint 增加本地 Effect 规则，拦截 legacy `@effect/cli` import、`repos/effect` import、
+  `Context.Tag`、`Effect.ignore`、`Effect.catchAllCause`、`Effect.serviceOption`、
+  `Effect.asVoid` 和 catch handler 静默返回 `Effect.void`/`Effect.unit`。
 
-仍有 tsgo suggestions：
-
-- `tracker/linear.ts` 中 JSON parse/stringify 可未来改 Effect Schema。
-- `TrackerClient` 的 `LinearTransport` requirement 泄漏可未来收敛到 layer creation。
-- `workflow/runtime.ts` 中 watch callback 里 `Effect.runPromise` 可未来改成更符合 Effect service context 的写法。
-
-这些是 suggestion，不阻塞当前 verify。
+当前 `tsgo` 没有输出 Effect suggestion；`pnpm verify` 是准入门。
 
 ## First-pass 明确范围
 
