@@ -1,0 +1,3 @@
+{"file": "SPEC.md", "reason": "Original reconciliation and terminal cleanup semantics"}
+{"file": "docs/goal/05-spec-alignment.md", "reason": "Known spec alignment deviation around terminal running issues"}
+{"file": "docs/goal/07-failure-recovery.md", "reason": "Current failure, retry, and cleanup behavior"}

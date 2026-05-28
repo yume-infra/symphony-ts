@@ -1,0 +1,2 @@
+{"file": "SPEC.md", "reason": "Runtime snapshot/status surface requirements"}
+{"file": ".trellis/spec/runtime-orchestration/orchestrator-state.md", "reason": "Snapshot and orchestrator state conventions"}

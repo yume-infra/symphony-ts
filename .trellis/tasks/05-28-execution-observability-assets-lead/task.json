@@ -1,0 +1,31 @@
+{
+  "id": "execution-observability-assets-lead",
+  "name": "execution-observability-assets-lead",
+  "title": "Execution observability and orchestration assets lead",
+  "description": "Lead task coordinating run-summary artifacts, terminal-draining policy, status surface, and reusable real-run harness work.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "sayoriqwq",
+  "assignee": "sayoriqwq",
+  "createdAt": "2026-05-28",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "05-28-agent-run-summary-artifacts",
+    "05-28-terminal-draining-semantics",
+    "05-28-runtime-status-snapshot-surface",
+    "05-28-real-integration-harness-assets"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
