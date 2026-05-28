@@ -76,6 +76,13 @@ max_journal_lines: 2000
 # Default package used when --package is not specified.
 # default_package: frontend
 
+# Project-local config is source data for this repository. Keep it out of
+# future template refreshes; .trellis/spec/ and .trellis/user/ are protected
+# by trellis-sq itself.
+update:
+  skip:
+    - .trellis/config.yaml
+
 # -------------------------------------------------------------------------------
 # Codex (dispatch behavior)
 # -------------------------------------------------------------------------------

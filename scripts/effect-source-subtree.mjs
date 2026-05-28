@@ -7,13 +7,13 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const manifestPath = join(root, 'repos/effect.pin.json')
+const manifestPath = join(root, 'repos/effect.subtree.json')
 
 const mode = process.argv[2] ?? 'verify'
 
 if (!['verify', 'update'].includes(mode)) {
   console.error(`Unknown mode: ${mode}`)
-  console.error('Usage: node scripts/effect-source-pin.mjs <verify|update>')
+  console.error('Usage: node scripts/effect-source-subtree.mjs <verify|update>')
   process.exit(1)
 }
 
@@ -51,6 +51,10 @@ function latestSubtreeSplit(prefix) {
 
 function trackedFiles() {
   return git(['ls-files']).split('\n').filter(Boolean)
+}
+
+function treeEntry(path) {
+  return git(['ls-tree', 'HEAD', path])
 }
 
 function isApplicationSource(file) {
@@ -93,6 +97,14 @@ function verify() {
     errors.push(`Missing vendored source directory: ${manifest.prefix}`)
   }
 
+  const entry = treeEntry(manifest.prefix)
+  if (entry.startsWith('160000 ')) {
+    errors.push(`${manifest.prefix} is a gitlink submodule; expected a git subtree directory.`)
+  }
+  else if (!entry.startsWith('040000 tree ')) {
+    errors.push(`${manifest.prefix} is not recorded as a Git tree entry.`)
+  }
+
   if (!existsSync(join(root, manifest.llmDocument))) {
     errors.push(`Missing Effect LLM document: ${manifest.llmDocument}`)
   }
@@ -103,7 +115,7 @@ function verify() {
   }
   else if (split !== manifest.split) {
     errors.push(
-      `Pinned split mismatch for ${manifest.prefix}: manifest has ${manifest.split}, git history has ${split}`,
+      `Subtree split mismatch for ${manifest.prefix}: manifest expects ${manifest.split}, git history has ${split}`,
     )
   }
 
@@ -115,14 +127,14 @@ function verify() {
   assertNoVendoredImports(errors)
 
   if (errors.length > 0) {
-    console.error('Effect source pin verification failed:')
+    console.error('Effect source subtree verification failed:')
     for (const error of errors) {
       console.error(`- ${error}`)
     }
     process.exit(1)
   }
 
-  console.log(`Effect source pin verified: ${manifest.prefix} @ ${manifest.split}`)
+  console.log(`Effect source subtree verified: ${manifest.prefix} @ git-subtree-split ${manifest.split}`)
 }
 
 function assertCleanWorktree() {

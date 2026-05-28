@@ -7,6 +7,7 @@ This project is managed by Trellis. The working knowledge you need lives under `
 
 - `.trellis/workflow.md` — development phases, when to create tasks, skill routing
 - `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/user/` — human-facing project context docs (project map, reading order, architecture notes)
 - `.trellis/workspace/` — per-developer journals and session traces
 - `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
 
@@ -22,8 +23,9 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 ## Project-Specific Agent Notes
 
-These notes are the temporary project authority until `.trellis/spec/` is rewritten. Do not update
-`.trellis/spec/` yet unless the user explicitly asks; the user is still collecting constraints.
+Durable project authority lives in `.trellis/spec/`. Human-facing project map and reading order
+live in `.trellis/user/`. Keep AGENTS as the bootstrap layer that lets a bare agent find the right
+project context quickly.
 
 ## Bare Agent Effect Bootstrap
 
@@ -37,7 +39,8 @@ Effect code, its answer must include this checklist before proposing implementat
 - Upstream source reference: `repos/effect/`, a read-only squashed subtree from
   `Effect-TS/effect-smol`.
 - Upstream LLM source guide: `repos/effect/LLMS.md`.
-- Source pin authority: `repos/effect.pin.json`; verify with `pnpm effect:source:verify`.
+- Subtree manifest guardrail: `repos/effect.subtree.json`; verify with
+  `pnpm effect:source:verify`.
 - Package authority: `package.json` and `pnpm-lock.yaml`.
 - Active baseline: `effect@4.0.0-beta.66` and `@effect/platform-node@4.0.0-beta.66`.
 - Import boundary: application and tests import from installed dependencies only; never import from
@@ -55,8 +58,8 @@ Effect code, its answer must include this checklist before proposing implementat
 - Treat `SPEC.md` as the reference blueprint and terminology source, not as something to blindly
   copy into implementation. Intentional project deviations must be called out and later recorded in
   Trellis specs.
-- This is not a traditional frontend/backend application. The current Trellis `backend/` and
-  `frontend/` specs are init templates and should not drive implementation decisions.
+- This is not a traditional frontend/backend application. Use the project-specific Trellis layers
+  under `.trellis/spec/` instead of generic frontend/backend assumptions.
 - The product is a long-running orchestration service distributed through a minimal CLI entrypoint.
   The initial command shape is:
 
@@ -77,8 +80,8 @@ Effect code, its answer must include this checklist before proposing implementat
   coding:
   - `docs/effect-patterns/index.md` is the first local Effect pattern index.
   - `repos/effect/` is the only vendored upstream Effect source path.
-  - `repos/effect/LLMS.md` is the upstream Effect v4 LLM guide from the pinned source.
-  - `repos/effect.pin.json` records the expected subtree repository, branch, and split.
+  - `repos/effect/LLMS.md` is the upstream Effect v4 LLM guide from the vendored source.
+  - `repos/effect.subtree.json` records the expected subtree repository, branch, and split.
   - `.trellis/spec/typescript-effect/index.md` is the Trellis code-spec entry for Effect work.
   - `package.json` plus `pnpm-lock.yaml` are the package-version authority.
 - The active Effect dependency baseline is Effect v4 beta. Treat `effect@4.0.0-beta.66` and
@@ -102,9 +105,10 @@ Effect code, its answer must include this checklist before proposing implementat
   `Effect-TS/effect-smol`. Use it for source, tests, examples, and API design reference only. Do
   not edit vendored files unless explicitly asked, and never import from `repos/effect` in
   application or test code.
-- Keep the subtree pin executable: `repos/effect.pin.json` is the manifest,
-  `pnpm effect:source:verify` checks it, and `pnpm effect:source:update` is the deliberate
-  `git subtree pull --squash` update path.
+- Keep subtree provenance executable: the Git-tracked `repos/effect/` tree plus the latest
+  `git-subtree-split` commit are the source pin. `repos/effect.subtree.json` is the verifier
+  manifest, `pnpm effect:source:verify` checks it, and `pnpm effect:source:update` is the
+  deliberate `git subtree pull --squash` update path.
 - Effect v4 beta implementation must use dependency imports, not vendored paths:
   - CLI: `effect/unstable/cli/Command` and `effect/unstable/cli/Flag`
   - Node runtime: `@effect/platform-node/NodeRuntime`
@@ -129,10 +133,9 @@ Effect code, its answer must include this checklist before proposing implementat
   Skills such as commit, pull, push, land, Linear tooling, worktree bootstrap, and debug playbooks
   should be introduced when the matching TypeScript runtime, CI, logging, and PR conventions exist.
 
-## Future Trellis Spec Direction
+## Trellis Spec Layout
 
-When the user is ready to rewrite `.trellis/spec/`, prefer long-form spec layers aligned to this
-project instead of frontend/backend templates:
+`.trellis/spec/` uses project-specific long-form layers instead of frontend/backend templates:
 
 - `symphony/`
 - `runtime-orchestration/`

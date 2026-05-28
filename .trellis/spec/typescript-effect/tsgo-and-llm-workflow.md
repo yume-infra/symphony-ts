@@ -41,7 +41,7 @@ Use it as read-only reference material:
 - do not edit vendored files unless explicitly asked
 - do not import from vendored source
 - application code imports from package dependencies
-- verify the pin with `pnpm effect:source:verify`
+- verify subtree provenance with `pnpm effect:source:verify`
 
 Project-local pattern docs must summarize the parts future agents should use so implementation does
 not devolve into broad source spelunking.
@@ -64,16 +64,17 @@ not devolve into broad source spelunking.
   - code-spec index: `.trellis/spec/typescript-effect/index.md`
   - upstream source reference: `repos/effect/`
   - upstream LLM guide: `repos/effect/LLMS.md`
-  - source pin manifest: `repos/effect.pin.json`
+  - subtree manifest: `repos/effect.subtree.json`
   - package authority: `package.json` and `pnpm-lock.yaml`
-  - diagnostics command: `rtk proxy pnpm --filter symphony-ts typecheck` or full
+  - diagnostics command: `rtk proxy pnpm --filter @sayoriqwq/symphony-ts typecheck` or full
     `rtk proxy pnpm verify`
 
 ### 3. Contracts
 
 - `repos/effect/` is a read-only squashed subtree from `Effect-TS/effect-smol` for the active Effect
   v4 beta source reference.
-- `repos/effect.pin.json` records the expected subtree repository, branch, prefix, split, and LLM
+- `repos/effect/` is the source pin through its Git-tracked tree and latest `git-subtree-split`.
+- `repos/effect.subtree.json` records the expected subtree repository, branch, prefix, split, and LLM
   guide path.
 - Application and test code must import from installed package dependencies only.
 - Active packages are `effect@4.0.0-beta.66` and `@effect/platform-node@4.0.0-beta.66` unless the
@@ -89,7 +90,7 @@ not devolve into broad source spelunking.
 - Missing `docs/effect-patterns/index.md` in the answer -> context bootstrap failure.
 - Missing `repos/effect/` in the answer -> source-reference discovery failure.
 - Missing `repos/effect/LLMS.md` for non-trivial Effect API work -> upstream LLM baseline failure.
-- Failing `pnpm effect:source:verify` -> source pin infrastructure failure.
+- Failing `pnpm effect:source:verify` -> source subtree infrastructure failure.
 - Answering only "context loaded" or "understood" -> no-task routing failure.
 - Asking whether to create a Trellis task for a pure Effect context-discovery question -> routing
   failure.

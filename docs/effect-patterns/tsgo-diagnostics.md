@@ -8,9 +8,9 @@ This project intentionally uses the experimental `@effect/tsgo` toolchain with
 Run Effect diagnostics through the project scripts:
 
 ```bash
-rtk pnpm typecheck
-rtk pnpm typecheck:tsc
-rtk pnpm verify
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts typecheck
+rtk proxy pnpm --filter @sayoriqwq/symphony-ts typecheck:tsc
+rtk proxy pnpm verify
 ```
 
 `pnpm typecheck` runs `turbo run typecheck`, and the CLI package runs
@@ -35,7 +35,7 @@ surface.
 - The `tsconfig.json` plugin entry named `@effect/language-service` configures
   diagnostics for `tsgo`; it is not a package dependency request.
 - If `tsgo` and `tsc` disagree, inspect the Effect diagnostic first, then
-  confirm with pinned source or official docs.
+  confirm with the vendored subtree source or official docs.
 - Keep examples in docs aligned with `tsgo` before turning them into runtime
   modules.
 
@@ -46,9 +46,9 @@ surface.
 3. Check source examples under `repos/effect/` only when needed.
 4. Run `pnpm effect:source:verify` if the subtree, docs, or package baseline changed.
 5. Implement the narrow runtime slice.
-6. Run `rtk pnpm typecheck`.
+6. Run `rtk proxy pnpm --filter @sayoriqwq/symphony-ts typecheck`.
 7. Use diagnostics to fix Effect API and floating Effect issues.
-8. Run task-specific tests and `rtk pnpm verify`.
+8. Run task-specific tests and `rtk proxy pnpm verify`.
 
 ## References
 

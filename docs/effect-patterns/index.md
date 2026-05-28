@@ -9,15 +9,16 @@ It is a squashed subtree from `Effect-TS/effect-smol`, the repository published
 in the `effect@4.0.0-beta.66` package metadata. The selected upstream commit is
 `b559d68845f848a10153395778f035682d399075`.
 
-The executable pin authority is `repos/effect.pin.json`. Verify it with:
+The Git-tracked `repos/effect/` tree plus the latest `git-subtree-split` commit are the source pin.
+`repos/effect.subtree.json` is a manifest guardrail for verification. Verify it with:
 
 ```bash
 pnpm effect:source:verify
 ```
 
-## Pinned Source Maintenance
+## Subtree Source Maintenance
 
-The pinned source follows the official Effect LLM workflow: keep the real
+The subtree source follows the official Effect LLM workflow: keep the real
 upstream source in-repo as a squashed subtree so agents can inspect it without
 depending on `node_modules` or a separate clone.
 
@@ -28,7 +29,7 @@ pnpm effect:source:update
 ```
 
 After updating, record the new `git-subtree-split` commit in
-`repos/effect.pin.json` and this file, then run `pnpm effect:source:verify` and
+`repos/effect.subtree.json` and this file, then run `pnpm effect:source:verify` and
 the `tsgo` validation loop before changing runtime code.
 
 ## Version Baseline
@@ -67,9 +68,9 @@ For non-trivial Effect code, use this order:
    - <https://effect.website/docs/data-types/data/>
    - <https://effect.website/docs/code-style/guidelines/>
 4. Vendored upstream source under `repos/effect/`.
-5. `rtk pnpm typecheck` diagnostics from `@effect/tsgo`.
+5. `rtk proxy pnpm --filter @sayoriqwq/symphony-ts typecheck` diagnostics from `@effect/tsgo`.
 
-Do not guess Effect APIs from memory when `tsgo` or the pinned source can
+Do not guess Effect APIs from memory when `tsgo` or the subtree source can
 answer the question.
 
 ## Import Boundary
