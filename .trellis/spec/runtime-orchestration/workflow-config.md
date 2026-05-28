@@ -26,6 +26,9 @@ The workflow/config layer owns:
 - Environment variables do not globally override YAML values.
 - `$VAR_NAME` resolution applies only to fields that explicitly contain `$VAR_NAME`.
 - Sensitive values should be represented with redaction-aware data where practical.
+- YAML syntax parsing should use a maintained parser dependency. The runtime should not maintain a
+  custom YAML subset parser; after YAML decodes to plain values, known config sections should pass
+  through Effect Schema before defaults and normalization.
 
 ## Dynamic Reload
 

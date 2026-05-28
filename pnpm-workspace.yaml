@@ -17,6 +17,7 @@ trustPolicy: no-downgrade
 trustPolicyExclude:
   - '@effect/platform-node@4.0.0-beta.66'
   - '@effect/platform-node-shared@4.0.0-beta.66'
+  - '@effect/vitest@4.0.0-beta.66'
   - effect@4.0.0-beta.66
 
 packages:
@@ -29,6 +30,7 @@ catalog:
   '@commitlint/config-conventional': ^21.0.1
   '@effect/platform-node': 4.0.0-beta.66
   '@effect/tsgo': ^0.7.0
+  '@effect/vitest': 4.0.0-beta.66
   '@types/node': ^25.6.0
   '@typescript/native-preview': 7.0.0-dev.20260513.1
   effect: 4.0.0-beta.66
@@ -41,6 +43,7 @@ catalog:
   turbo: ^2.9.9
   typescript: ^6.0.3
   vitest: ^4.1.5
+  yaml: ^2.9.0
 
 updateConfig:
   ignoreDependencies:

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect'
+import { Context, Effect, Layer, Schema } from 'effect'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -20,23 +20,24 @@ export class RuntimeLogger extends Context.Service<RuntimeLogger, RuntimeLoggerS
   'symphony/RuntimeLogger',
 ) {}
 
-const RuntimeLoggerLiveValue: RuntimeLoggerShape = {
-  log: writeLog,
-  info: (message, context) => writeLog('info', message, context),
-  warn: (message, context) => writeLog('warn', message, context),
-  error: (message, context) => writeLog('error', message, context),
-}
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.UnknownFromJsonString)
 
-export const RuntimeLoggerLive = Layer.succeed(RuntimeLogger)(RuntimeLoggerLiveValue)
-
-function writeLog(level: LogLevel, message: string, context: LogContext = {}): Effect.Effect<void> {
-  return Effect.sync(() => {
+const writeLog = Effect.fn('writeLog')((level: LogLevel, message: string, context: LogContext = {}): Effect.Effect<void> =>
+  Effect.sync(() => {
     const line = formatStructuredLog(level, message, context)
     const sink = level === 'error' || level === 'warn' ? console.error : console.log
 
     sink(line)
-  })
+  }))
+
+const RuntimeLoggerLiveValue: RuntimeLoggerShape = {
+  log: Effect.fn('RuntimeLogger.log')((level: LogLevel, message: string, context?: LogContext) => writeLog(level, message, context)),
+  info: Effect.fn('RuntimeLogger.info')((message: string, context?: LogContext) => writeLog('info', message, context)),
+  warn: Effect.fn('RuntimeLogger.warn')((message: string, context?: LogContext) => writeLog('warn', message, context)),
+  error: Effect.fn('RuntimeLogger.error')((message: string, context?: LogContext) => writeLog('error', message, context)),
 }
+
+export const RuntimeLoggerLive = Layer.succeed(RuntimeLogger)(RuntimeLoggerLiveValue)
 
 export function formatStructuredLog(level: LogLevel, message: string, context: LogContext = {}): string {
   const fields = {
@@ -58,7 +59,7 @@ function formatLogValue(value: string | number | boolean | null): string {
 
   const stringValue = String(value)
 
-  return /^[\w.:/\-[\]]+$/.test(stringValue) ? stringValue : JSON.stringify(stringValue)
+  return /^[\w.:/\-[\]]+$/.test(stringValue) ? stringValue : encodeUnknownJsonString(stringValue)
 }
 
 function redactIfSecret(

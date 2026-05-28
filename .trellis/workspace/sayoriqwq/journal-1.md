@@ -463,3 +463,34 @@ Added an executable Effect source pin manifest and verifier/update script, wired
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Effect native audit first pass
+
+**Date**: 2026-05-28
+**Task**: Effect native audit first pass
+**Branch**: `main`
+
+### Summary
+
+Established Effect audit harness, converted high-value Effect boundaries to Effect.fn, added function-boundary guide and ADR, updated specs, and verified with pnpm verify.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -38,8 +38,11 @@ Failure semantics:
 
 - `after_create` failure aborts workspace creation.
 - `before_run` failure aborts the current attempt.
-- `after_run` failure is logged and ignored.
-- `before_remove` failure is logged and ignored; cleanup continues.
+- `after_run` failure is reported through a best-effort failure handler and ignored.
+- `before_remove` failure is reported through a best-effort failure handler and ignored; cleanup
+  continues.
+- Workspace remove failure is reported through the same handler and ignored by the low-level
+  workspace service. Orchestrator callers should wire the handler to structured runtime logs.
 
 ## Effect Guidance
 

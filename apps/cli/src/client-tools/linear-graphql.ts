@@ -25,27 +25,27 @@ interface LinearGraphQLToolInput {
   readonly variables?: Record<string, unknown>
 }
 
-export function executeLinearGraphQLTool(
+export const executeLinearGraphQLTool = Effect.fn('executeLinearGraphQLTool')(function* (
   config: ServiceConfig,
   input: unknown,
-): Effect.Effect<LinearGraphQLToolResult, never, LinearTransport> {
+): Effect.fn.Return<LinearGraphQLToolResult, never, LinearTransport> {
   const parsed = parseLinearGraphQLToolInput(input)
 
   if (parsed.success === false) {
-    return Effect.succeed(parsed)
+    return parsed
   }
 
   if (config.tracker.kind !== 'linear' || config.tracker.apiKey === null || config.tracker.apiKey === '') {
-    return Effect.succeed({
+    return {
       success: false,
       error: {
         code: 'missing_auth',
         message: 'linear_graphql requires Linear tracker auth',
       },
-    })
+    }
   }
 
-  return executeLinearGraphQL(
+  return yield* executeLinearGraphQL(
     config,
     'linear_graphql_tool',
     parsed.value.query,
@@ -87,7 +87,7 @@ export function executeLinearGraphQLTool(
       },
     })),
   )
-}
+})
 
 function parseLinearGraphQLToolInput(input: unknown): {
   readonly success: true

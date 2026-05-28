@@ -1,8 +1,7 @@
 import type { CodexRuntimeEvent } from '../agent-runner/codex.js'
 import type { Issue, ServiceConfig } from '../domain/types.js'
-import { Ref } from 'effect'
-import { describe, expect, it } from 'vitest'
-import { runEffect } from '../../tests/support/effect.js'
+import { describe, expect, it } from '@effect/vitest'
+import { Effect, Ref } from 'effect'
 import {
   failureRetryDelayMs,
   handleWorkerExitInState,
@@ -108,29 +107,30 @@ describe('orchestrator state rules', () => {
     })).toBe(300000)
   })
 
-  it('aggregates token deltas and exposes live runtime in snapshots', async () => {
-    const ref = await runEffect(Ref.make(initialRuntimeState()))
-    const state = makeOrchestratorState(ref)
-    await runEffect(state.set(tryMarkRunningInState(initialRuntimeState(), issue(), config, 1000, null, null)[1]))
+  it.effect('aggregates token deltas and exposes live runtime in snapshots', () =>
+    Effect.gen(function* () {
+      const ref = yield* Ref.make(initialRuntimeState())
+      const state = makeOrchestratorState(ref)
+      yield* state.set(tryMarkRunningInState(initialRuntimeState(), issue(), config, 1000, null, null)[1])
 
-    await runEffect(state.recordCodexEvent('issue-1', event({
-      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-    })))
-    await runEffect(state.recordCodexEvent('issue-1', event({
-      usage: { inputTokens: 13, outputTokens: 8, totalTokens: 21 },
-      rateLimits: { remaining: 1 },
-    })))
+      yield* state.recordCodexEvent('issue-1', event({
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      }))
+      yield* state.recordCodexEvent('issue-1', event({
+        usage: { inputTokens: 13, outputTokens: 8, totalTokens: 21 },
+        rateLimits: { remaining: 1 },
+      }))
 
-    const snapshot = await runEffect(state.snapshot(config, 3000))
+      const snapshot = yield* state.snapshot(config, 3000)
 
-    expect(snapshot.codexTotals).toMatchObject({
-      inputTokens: 13,
-      outputTokens: 8,
-      totalTokens: 21,
-      secondsRunning: 2,
-    })
-    expect(snapshot.rateLimits).toEqual({ remaining: 1 })
-  })
+      expect(snapshot.codexTotals).toMatchObject({
+        inputTokens: 13,
+        outputTokens: 8,
+        totalTokens: 21,
+        secondsRunning: 2,
+      })
+      expect(snapshot.rateLimits).toEqual({ remaining: 1 })
+    }))
 })
 
 export function issue(overrides: Partial<Issue> = {}): Issue {

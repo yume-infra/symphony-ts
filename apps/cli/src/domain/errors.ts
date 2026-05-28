@@ -7,6 +7,13 @@ export class WorkflowLoadError extends Data.TaggedError('WorkflowLoadError')<{
   readonly cause?: unknown
 }> {}
 
+export class WorkflowWatchError extends Data.TaggedError('WorkflowWatchError')<{
+  readonly code: 'workflow_watch_error'
+  readonly path: string
+  readonly reason: string
+  readonly cause?: unknown
+}> {}
+
 export class WorkflowParseError extends Data.TaggedError('WorkflowParseError')<{
   readonly code: 'workflow_parse_error' | 'workflow_front_matter_not_a_map'
   readonly path: string
@@ -26,6 +33,7 @@ export class ConfigError extends Data.TaggedError('ConfigError')<{
   readonly path: string
   readonly field: string
   readonly reason: string
+  readonly cause?: unknown
 }> {}
 
 export class PromptRenderError extends Data.TaggedError('PromptRenderError')<{

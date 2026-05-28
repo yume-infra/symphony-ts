@@ -1,12 +1,15 @@
 import type { Issue, ServiceConfig } from '../domain/types.js'
 import type { LinearGraphQLRequest, LinearGraphQLResponse } from '../tracker/linear.js'
 import type { CodexRunParams } from './codex.js'
-import { Effect, Layer } from 'effect'
-import { describe, expect, it } from 'vitest'
-import { runEffect } from '../../tests/support/effect.js'
+import * as NodeServices from '@effect/platform-node/NodeServices'
+import { describe, expect, it } from '@effect/vitest'
+import { Effect, Layer, Schema } from 'effect'
 import { createFakeCodexAppServerScript } from '../../tests/support/fakes/codex-app-server.js'
+import { withFakeWorkspace } from '../../tests/support/fakes/workspace.js'
 import { LinearTransport } from '../tracker/linear.js'
-import { runCodexScriptTurn } from './codex.js'
+import { CodexAppServerClient, CodexAppServerClientLive, runCodexScriptTurn } from './codex.js'
+
+const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)
 
 const issue: Issue = {
   id: 'issue-1',
@@ -74,302 +77,353 @@ const baseParams: CodexRunParams = {
 }
 
 describe('codex app-server boundary', () => {
-  it('starts a JSON-RPC thread and turn, then extracts identities, usage, rate limits, and events', async () => {
-    const script = createFakeCodexAppServerScript([
-      initializeOk(),
-      threadOk(),
-      turnStartOk(),
-      {
-        method: 'thread/tokenUsage/updated',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-1',
-          tokenUsage: {
-            total: {
-              inputTokens: 10,
-              outputTokens: 5,
-              totalTokens: 15,
+  it.effect('starts a JSON-RPC thread and turn, then extracts identities, usage, rate limits, and events', () =>
+    Effect.gen(function* () {
+      const script = createFakeCodexAppServerScript([
+        initializeOk(),
+        threadOk(),
+        turnStartOk(),
+        {
+          method: 'thread/tokenUsage/updated',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            tokenUsage: {
+              total: {
+                inputTokens: 10,
+                outputTokens: 5,
+                totalTokens: 15,
+              },
             },
           },
         },
-      },
-      {
-        method: 'account/rateLimits/updated',
-        params: {
-          rateLimits: {
-            primary: {
-              remaining: 1,
+        {
+          method: 'account/rateLimits/updated',
+          params: {
+            rateLimits: {
+              primary: {
+                remaining: 1,
+              },
             },
           },
         },
-      },
-      turnCompleted(),
-    ])
-    const events: Array<string> = []
-    const result = await runEffect(runCodexScriptTurn(script, {
-      ...baseParams,
-      onEvent: event => Effect.sync(() => {
-        events.push(event.event)
-      }),
-    }), { layer: fakeLinear([]).layer })
+        turnCompleted(),
+      ])
+      const events: Array<string> = []
+      const result = yield* runCodexScriptTurn(script, {
+        ...baseParams,
+        onEvent: event => Effect.sync(() => {
+          events.push(event.event)
+        }),
+      }).pipe(Effect.provide(fakeLinear([]).layer))
 
-    expect(result).toMatchObject({
-      sessionId: 'thread-1-turn-1',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      usage: {
-        inputTokens: 10,
-        outputTokens: 5,
-        totalTokens: 15,
-      },
-      rateLimits: {
-        primary: {
-          remaining: 1,
-        },
-      },
-    })
-    expect(events).toEqual([
-      'session_started',
-      'thread/tokenUsage/updated',
-      'account/rateLimits/updated',
-      'turn/completed',
-    ])
-    expect(recordAt(script.sentMessages, 0)).toMatchObject({
-      id: 1,
-      method: 'initialize',
-      params: {
-        clientInfo: {
-          name: 'symphony-ts',
-          version: '0.0.0',
-        },
-        capabilities: {
-          experimentalApi: true,
-        },
-      },
-    })
-    expect(recordAt(script.sentMessages, 1)).toMatchObject({
-      id: 2,
-      method: 'thread/start',
-      params: {
-        cwd: '/tmp/symphony/SYM-1',
-        approvalPolicy: 'never',
-        sandbox: 'workspace-write',
-        serviceName: 'symphony-ts',
-      },
-    })
-    expect(recordAt(script.sentMessages, 1).params).not.toHaveProperty('tools')
-    expect(recordAt(script.sentMessages, 2)).toMatchObject({
-      id: 3,
-      method: 'turn/start',
-      params: {
+      expect(result).toMatchObject({
+        sessionId: 'thread-1-turn-1',
         threadId: 'thread-1',
-        cwd: '/tmp/symphony/SYM-1',
-        approvalPolicy: 'never',
-        input: [
-          {
-            type: 'text',
-            text: 'Prompt',
-            text_elements: [],
+        turnId: 'turn-1',
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        },
+        rateLimits: {
+          primary: {
+            remaining: 1,
           },
-        ],
-      },
-    })
-    expect(recordAt(script.sentMessages, 2).params).not.toHaveProperty('tools')
-  })
+        },
+      })
+      expect(events).toEqual([
+        'session_started',
+        'thread/tokenUsage/updated',
+        'account/rateLimits/updated',
+        'turn/completed',
+      ])
+      expect(recordAt(script.sentMessages, 0)).toMatchObject({
+        id: 1,
+        method: 'initialize',
+        params: {
+          clientInfo: {
+            name: 'symphony-ts',
+            version: '0.0.0',
+          },
+          capabilities: {
+            experimentalApi: true,
+          },
+        },
+      })
+      expect(recordAt(script.sentMessages, 1)).toMatchObject({
+        id: 2,
+        method: 'thread/start',
+        params: {
+          cwd: '/tmp/symphony/SYM-1',
+          approvalPolicy: 'never',
+          sandbox: 'workspace-write',
+          serviceName: 'symphony-ts',
+        },
+      })
+      expect(recordAt(script.sentMessages, 1).params).not.toHaveProperty('tools')
+      expect(recordAt(script.sentMessages, 2)).toMatchObject({
+        id: 3,
+        method: 'turn/start',
+        params: {
+          threadId: 'thread-1',
+          cwd: '/tmp/symphony/SYM-1',
+          approvalPolicy: 'never',
+          input: [
+            {
+              type: 'text',
+              text: 'Prompt',
+              text_elements: [],
+            },
+          ],
+        },
+      })
+      expect(recordAt(script.sentMessages, 2).params).not.toHaveProperty('tools')
+    }))
 
-  it('resumes an existing thread before starting the next turn', async () => {
-    const script = createFakeCodexAppServerScript([
-      initializeOk(),
-      threadOk(2, 'thread-existing'),
-      turnStartOk(3, 'thread-existing', 'turn-2'),
-      turnCompleted('thread-existing', 'turn-2'),
-    ])
+  it.effect('resumes an existing thread before starting the next turn', () =>
+    Effect.gen(function* () {
+      const script = createFakeCodexAppServerScript([
+        initializeOk(),
+        threadOk(2, 'thread-existing'),
+        turnStartOk(3, 'thread-existing', 'turn-2'),
+        turnCompleted('thread-existing', 'turn-2'),
+      ])
 
-    const result = await runEffect(runCodexScriptTurn(script, {
-      ...baseParams,
-      threadId: 'thread-existing',
-      turnNumber: 2,
-    }), { layer: fakeLinear([]).layer })
-
-    expect(result).toMatchObject({
-      sessionId: 'thread-existing-turn-2',
-      threadId: 'thread-existing',
-      turnId: 'turn-2',
-      turnCount: 2,
-    })
-    expect(recordAt(script.sentMessages, 1)).toMatchObject({
-      method: 'thread/resume',
-      params: {
+      const result = yield* runCodexScriptTurn(script, {
+        ...baseParams,
         threadId: 'thread-existing',
-        cwd: '/tmp/symphony/SYM-1',
-      },
-    })
-  })
+        turnNumber: 2,
+      }).pipe(Effect.provide(fakeLinear([]).layer))
 
-  it('rejects app-server launch when cwd is not the issue workspace', async () => {
-    const script = createFakeCodexAppServerScript([])
-    const error = await runEffect(Effect.flip(runCodexScriptTurn(script, {
-      ...baseParams,
-      cwd: '/tmp/symphony',
-    })), { layer: fakeLinear([]).layer })
+      expect(result).toMatchObject({
+        sessionId: 'thread-existing-turn-2',
+        threadId: 'thread-existing',
+        turnId: 'turn-2',
+        turnCount: 2,
+      })
+      expect(recordAt(script.sentMessages, 1)).toMatchObject({
+        method: 'thread/resume',
+        params: {
+          threadId: 'thread-existing',
+          cwd: '/tmp/symphony/SYM-1',
+        },
+      })
+    }))
 
-    expect(error).toMatchObject({
-      code: 'invalid_workspace_cwd',
-    })
-  })
+  it.effect('rejects app-server launch when cwd is not the issue workspace', () =>
+    Effect.gen(function* () {
+      const script = createFakeCodexAppServerScript([])
+      const error = yield* runCodexScriptTurn(script, {
+        ...baseParams,
+        cwd: '/tmp/symphony',
+      }).pipe(Effect.flip, Effect.provide(fakeLinear([]).layer))
 
-  it('fails user-input server requests instead of stalling', async () => {
-    const script = createFakeCodexAppServerScript([
-      initializeOk(),
-      threadOk(),
-      turnStartOk(),
-      {
+      expect(error).toMatchObject({
+        code: 'invalid_workspace_cwd',
+      })
+    }))
+
+  it.effect('fails user-input server requests instead of stalling', () =>
+    Effect.gen(function* () {
+      const script = createFakeCodexAppServerScript([
+        initializeOk(),
+        threadOk(),
+        turnStartOk(),
+        {
+          id: 'input-1',
+          method: 'item/tool/requestUserInput',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            message: 'Need operator input',
+          },
+        },
+      ])
+      const error = yield* runCodexScriptTurn(script, baseParams).pipe(
+        Effect.flip,
+        Effect.provide(fakeLinear([]).layer),
+      )
+
+      expect(error).toMatchObject({
+        code: 'turn_input_required',
+        sessionId: 'thread-1-turn-1',
+      })
+      expect(recordAt(script.sentMessages, 3)).toMatchObject({
         id: 'input-1',
-        method: 'item/tool/requestUserInput',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-1',
-          message: 'Need operator input',
+        error: {
+          code: -32000,
         },
-      },
-    ])
-    const error = await runEffect(Effect.flip(runCodexScriptTurn(script, baseParams)), {
-      layer: fakeLinear([]).layer,
-    })
+      })
+    }))
 
-    expect(error).toMatchObject({
-      code: 'turn_input_required',
-      sessionId: 'thread-1-turn-1',
-    })
-    expect(recordAt(script.sentMessages, 3)).toMatchObject({
-      id: 'input-1',
-      error: {
-        code: -32000,
-      },
-    })
-  })
+  it.effect('auto-approves MCP elicitation requests so trusted connector tools can run unattended', () =>
+    Effect.gen(function* () {
+      const script = createFakeCodexAppServerScript([
+        initializeOk(),
+        threadOk(),
+        turnStartOk(),
+        {
+          id: 'approval-1',
+          method: 'mcpServer/elicitation/request',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            serverName: 'codex_apps',
+            mode: 'form',
+            message: 'Allow Linear to run tool "linear_save_issue"?',
+            requestedSchema: {
+              type: 'object',
+              properties: {},
+            },
+          },
+        },
+        turnCompleted(),
+      ])
+      const events: Array<string> = []
 
-  it('auto-approves MCP elicitation requests so trusted connector tools can run unattended', async () => {
-    const script = createFakeCodexAppServerScript([
-      initializeOk(),
-      threadOk(),
-      turnStartOk(),
-      {
+      yield* runCodexScriptTurn(script, {
+        ...baseParams,
+        onEvent: event => Effect.sync(() => {
+          events.push(event.event)
+        }),
+      }).pipe(Effect.provide(fakeLinear([]).layer))
+
+      expect(recordAt(script.sentMessages, 3)).toMatchObject({
         id: 'approval-1',
-        method: 'mcpServer/elicitation/request',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-1',
-          serverName: 'codex_apps',
-          mode: 'form',
-          message: 'Allow Linear to run tool "linear_save_issue"?',
-          requestedSchema: {
-            type: 'object',
-            properties: {},
+        result: {
+          action: 'accept',
+          content: {},
+        },
+      })
+      expect(events).toContain('approval_granted')
+      expect(events).not.toContain('approval_rejected')
+    }))
+
+  it.effect('returns protocol-shaped failures for unsupported dynamic tools and continues', () =>
+    Effect.gen(function* () {
+      const script = createFakeCodexAppServerScript([
+        initializeOk(),
+        threadOk(),
+        turnStartOk(),
+        {
+          id: 'tool-1',
+          method: 'item/tool/call',
+          params: {
+            tool: 'unknown_tool',
+            arguments: {},
+            callId: 'call-1',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
           },
         },
-      },
-      turnCompleted(),
-    ])
-    const events: Array<string> = []
+        turnCompleted(),
+      ])
 
-    await runEffect(runCodexScriptTurn(script, {
-      ...baseParams,
-      onEvent: event => Effect.sync(() => {
-        events.push(event.event)
-      }),
-    }), { layer: fakeLinear([]).layer })
+      yield* runCodexScriptTurn(script, baseParams).pipe(Effect.provide(fakeLinear([]).layer))
 
-    expect(recordAt(script.sentMessages, 3)).toMatchObject({
-      id: 'approval-1',
-      result: {
-        action: 'accept',
-        content: {},
-      },
-    })
-    expect(events).toContain('approval_granted')
-    expect(events).not.toContain('approval_rejected')
-  })
-
-  it('returns protocol-shaped failures for unsupported dynamic tools and continues', async () => {
-    const script = createFakeCodexAppServerScript([
-      initializeOk(),
-      threadOk(),
-      turnStartOk(),
-      {
+      expect(recordAt(script.sentMessages, 3)).toMatchObject({
         id: 'tool-1',
-        method: 'item/tool/call',
-        params: {
-          tool: 'unknown_tool',
-          arguments: {},
-          callId: 'call-1',
-          threadId: 'thread-1',
-          turnId: 'turn-1',
+        result: {
+          success: false,
+          contentItems: [
+            {
+              type: 'inputText',
+            },
+          ],
         },
-      },
-      turnCompleted(),
-    ])
+      })
+      expect(dynamicToolText(script.sentMessages[3])).toContain('unsupported_tool_call')
+    }))
 
-    await runEffect(runCodexScriptTurn(script, baseParams), { layer: fakeLinear([]).layer })
-
-    expect(recordAt(script.sentMessages, 3)).toMatchObject({
-      id: 'tool-1',
-      result: {
-        success: false,
-        contentItems: [
-          {
-            type: 'inputText',
+  it.effect('routes linear_graphql tool calls through configured Linear auth', () =>
+    Effect.gen(function* () {
+      const script = createFakeCodexAppServerScript([
+        initializeOk(),
+        threadOk(),
+        turnStartOk(),
+        {
+          id: 'tool-1',
+          method: 'item/tool/call',
+          params: {
+            tool: 'linear_graphql',
+            arguments: { query: 'query Viewer { viewer { id } }' },
+            callId: 'call-1',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
           },
-        ],
-      },
-    })
-    expect(dynamicToolText(script.sentMessages[3])).toContain('unsupported_tool_call')
-  })
-
-  it('routes linear_graphql tool calls through configured Linear auth', async () => {
-    const script = createFakeCodexAppServerScript([
-      initializeOk(),
-      threadOk(),
-      turnStartOk(),
-      {
-        id: 'tool-1',
-        method: 'item/tool/call',
-        params: {
-          tool: 'linear_graphql',
-          arguments: { query: 'query Viewer { viewer { id } }' },
-          callId: 'call-1',
-          threadId: 'thread-1',
-          turnId: 'turn-1',
         },
-      },
-      turnCompleted(),
-    ])
-    const fake = fakeLinear([{ status: 200, body: { data: { viewer: { id: 'me' } } } }])
+        turnCompleted(),
+      ])
+      const fake = fakeLinear([{ status: 200, body: { data: { viewer: { id: 'me' } } } }])
 
-    await runEffect(runCodexScriptTurn(script, baseParams), { layer: fake.layer })
+      yield* runCodexScriptTurn(script, baseParams).pipe(Effect.provide(fake.layer))
 
-    expect(fake.requests).toHaveLength(1)
-    expect(fake.requests[0]).toMatchObject({
-      endpoint: 'https://linear.example/graphql',
-      apiKey: 'linear-secret',
-    })
-    expect(recordAt(script.sentMessages, 3)).toMatchObject({
-      id: 'tool-1',
-      result: {
+      expect(fake.requests).toHaveLength(1)
+      expect(fake.requests[0]).toMatchObject({
+        endpoint: 'https://linear.example/graphql',
+        apiKey: 'linear-secret',
+      })
+      expect(recordAt(script.sentMessages, 3)).toMatchObject({
+        id: 'tool-1',
+        result: {
+          success: true,
+        },
+      })
+      expect(decodeUnknownJsonString(dynamicToolText(script.sentMessages[3]))).toMatchObject({
         success: true,
-      },
-    })
-    expect(JSON.parse(dynamicToolText(script.sentMessages[3]))).toMatchObject({
-      success: true,
-      body: {
-        data: {
-          viewer: {
-            id: 'me',
+        body: {
+          data: {
+            viewer: {
+              id: 'me',
+            },
           },
         },
-      },
-    })
-  })
+      })
+    }))
+
+  it.live('runs the live JSON-RPC bridge through the Effect child-process adapter', () =>
+    withFakeWorkspace(
+      workspace =>
+        Effect.gen(function* () {
+          const events: Array<string> = []
+          const processIds: Array<string | null> = []
+          const fake = fakeLinear([])
+          const result = yield* Effect.gen(function* () {
+            const client = yield* CodexAppServerClient
+
+            return yield* client.runTurn({
+              ...baseParams,
+              command: `${shellQuote(process.execPath)} -e ${shellQuote(fakeAppServerSource())}`,
+              cwd: workspace.path,
+              workspacePath: workspace.path,
+              onEvent: event => Effect.sync(() => {
+                events.push(event.event)
+                processIds.push(event.codexAppServerPid)
+              }),
+            })
+          }).pipe(Effect.provide(Layer.merge(CodexAppServerClientLive, fake.layer)))
+
+          expect(result).toMatchObject({
+            sessionId: 'thread-process-turn-process',
+            threadId: 'thread-process',
+            turnId: 'turn-process',
+            usage: {
+              inputTokens: 7,
+              outputTokens: 3,
+              totalTokens: 10,
+            },
+          })
+          expect(events).toEqual([
+            'session_started',
+            'thread/tokenUsage/updated',
+            'turn/completed',
+          ])
+          expect(processIds.every(processId => processId !== null)).toBe(true)
+          expect(fake.requests).toHaveLength(0)
+        }),
+      'symphony-codex-',
+    ).pipe(Effect.provide(NodeServices.layer)))
 })
 
 function initializeOk(id = 1): Record<string, unknown> {
@@ -445,6 +499,84 @@ function fakeLinear(responses: ReadonlyArray<LinearGraphQLResponse>): {
         }),
     }),
   }
+}
+
+function fakeAppServerSource(): string {
+  return `
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+
+  if (message.method === "initialize") {
+    send({
+      id: message.id,
+      result: {
+        userAgent: "fake-codex",
+        codexHome: "/tmp/fake-codex",
+        platformFamily: "unix",
+        platformOs: "macos"
+      }
+    });
+    return;
+  }
+
+  if (message.method === "thread/start") {
+    send({
+      id: message.id,
+      result: {
+        thread: {
+          id: "thread-process"
+        }
+      }
+    });
+    return;
+  }
+
+  if (message.method === "turn/start") {
+    send({
+      id: message.id,
+      result: {
+        threadId: "thread-process",
+        turn: {
+          id: "turn-process",
+          status: "inProgress"
+        }
+      }
+    });
+    send({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-process",
+        turnId: "turn-process",
+        tokenUsage: {
+          total: {
+            inputTokens: 7,
+            outputTokens: 3,
+            totalTokens: 10
+          }
+        }
+      }
+    });
+    send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-process",
+        turn: {
+          id: "turn-process",
+          status: "completed"
+        }
+      }
+    });
+  }
+});
+`
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 function dynamicToolText(message: unknown): string {

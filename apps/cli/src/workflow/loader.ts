@@ -1,7 +1,9 @@
+import type { PlatformError } from 'effect'
 import type { WorkflowDefinition } from '../domain/types.js'
 import { dirname, resolve } from 'node:path'
 import process from 'node:process'
-import { Context, Effect, Layer } from 'effect'
+import * as NodeServices from '@effect/platform-node/NodeServices'
+import { Context, Effect, FileSystem, Layer } from 'effect'
 import { WorkflowLoadError, WorkflowParseError } from '../domain/errors.js'
 import { parseYamlFrontMatter } from './yaml.js'
 
@@ -20,27 +22,15 @@ export class WorkflowLoader extends Context.Service<WorkflowLoader, WorkflowLoad
   'symphony/WorkflowLoader',
 ) {}
 
-export const WorkflowLoaderLive = Layer.succeed(WorkflowLoader)({
-  selectPath: selectWorkflowPath,
-  parse: parseWorkflowSource,
-  load: workflowPath =>
-    Effect.gen(function* () {
-      const path = selectWorkflowPath(workflowPath)
-      const source = yield* readWorkflowFile(path)
-
-      return yield* parseWorkflowSource(source, path)
-    }),
-})
-
 export function selectWorkflowPath(workflowPath: string | undefined, cwd = process.cwd()): string {
   return resolve(cwd, workflowPath ?? 'WORKFLOW.md')
 }
 
-export function parseWorkflowSource(
+export const parseWorkflowSource = Effect.fn('parseWorkflowSource')((
   source: string,
   path: string,
-): Effect.Effect<WorkflowDefinition, WorkflowParseError> {
-  return Effect.try({
+): Effect.Effect<WorkflowDefinition, WorkflowParseError> =>
+  Effect.try({
     try: () => {
       const normalized = source.replace(/\r\n/g, '\n')
 
@@ -77,8 +67,7 @@ export function parseWorkflowSource(
         cause,
       })
     },
-  })
-}
+  }))
 
 function makeWorkflowDefinition(
   path: string,
@@ -93,25 +82,39 @@ function makeWorkflowDefinition(
   }
 }
 
-function readWorkflowFile(path: string): Effect.Effect<string, WorkflowLoadError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const { readFile } = await import('node:fs/promises')
+const readWorkflowFileWithFileSystem = Effect.fn('readWorkflowFile.fileSystem')(function* (
+  path: string,
+): Effect.fn.Return<string, WorkflowLoadError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem
 
-      return readFile(path, 'utf8')
-    },
-    catch: cause => new WorkflowLoadError({
-      code: isMissingFileError(cause) ? 'missing_workflow_file' : 'workflow_read_error',
-      path,
-      reason: isMissingFileError(cause) ? 'workflow file does not exist' : 'workflow file could not be read',
-      cause,
-    }),
+  return yield* fs.readFileString(path).pipe(
+    Effect.mapError(cause => workflowFileSystemError(cause, path)),
+  )
+})
+
+const readWorkflowFile = Effect.fn('readWorkflowFile')((path: string): Effect.Effect<string, WorkflowLoadError> =>
+  readWorkflowFileWithFileSystem(path).pipe(
+    Effect.provide(NodeServices.layer),
+  ))
+
+export const WorkflowLoaderLive = Layer.succeed(WorkflowLoader)({
+  selectPath: selectWorkflowPath,
+  parse: Effect.fn('WorkflowLoader.parse')((source: string, path: string) => parseWorkflowSource(source, path)),
+  load: Effect.fn('WorkflowLoader.load')(function* (workflowPath: string | undefined) {
+    const path = selectWorkflowPath(workflowPath)
+    const source = yield* readWorkflowFile(path)
+
+    return yield* parseWorkflowSource(source, path)
+  }),
+})
+
+function workflowFileSystemError(cause: PlatformError.PlatformError, path: string): WorkflowLoadError {
+  const missing = cause.reason._tag === 'NotFound'
+
+  return new WorkflowLoadError({
+    code: missing ? 'missing_workflow_file' : 'workflow_read_error',
+    path,
+    reason: missing ? 'workflow file does not exist' : 'workflow file could not be read',
+    cause,
   })
-}
-
-function isMissingFileError(cause: unknown): boolean {
-  return typeof cause === 'object'
-    && cause !== null
-    && 'code' in cause
-    && cause.code === 'ENOENT'
 }

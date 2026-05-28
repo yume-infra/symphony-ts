@@ -1,21 +1,30 @@
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import type { Scope } from 'effect'
+import { Effect, FileSystem } from 'effect'
 
 export interface FakeWorkspace {
   readonly root: string
   readonly path: string
-  readonly cleanup: () => Promise<void>
 }
 
-export async function createFakeWorkspace(
+export const makeFakeWorkspace = Effect.fn('makeFakeWorkspace')(function* (
   prefix = 'symphony-ts-test-',
-): Promise<FakeWorkspace> {
-  const root = await mkdtemp(join(tmpdir(), prefix))
+): Effect.fn.Return<FakeWorkspace, never, FileSystem.FileSystem | Scope.Scope> {
+  const fs = yield* FileSystem.FileSystem
+  const root = yield* fs.makeTempDirectoryScoped({ prefix }).pipe(Effect.orDie)
 
   return {
     root,
     path: root,
-    cleanup: () => rm(root, { recursive: true, force: true }),
   }
+})
+
+export function withFakeWorkspace<A, E, R>(
+  use: (workspace: FakeWorkspace) => Effect.Effect<A, E, R>,
+  prefix?: string,
+): Effect.Effect<A, E, R | FileSystem.FileSystem> {
+  return Effect.scoped(Effect.gen(function* () {
+    const workspace = yield* makeFakeWorkspace(prefix)
+
+    return yield* use(workspace)
+  }))
 }

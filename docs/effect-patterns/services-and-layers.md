@@ -63,6 +63,28 @@ export const loadInitialWorkflow = (path: string) =>
   finalizer.
 - Use `Layer.succeed` for pure implementations and fakes.
 
+When `Layer.effect` construction is more than a tiny literal, put the
+construction body in a named `Effect.fn` factory and have the layer delegate to
+it. This keeps service startup diagnostics named while preserving the normal
+layer boundary:
+
+```ts
+const makeWorkflowRuntime = Effect.fn("WorkflowRuntime.make")(function*() {
+  const loader = yield* WorkflowLoader
+  const state = yield* Ref.make(initialState)
+
+  return {
+    getSnapshot: Ref.get(state),
+    reload: reloadWorkflow(loader, state),
+  }
+})
+
+export const WorkflowRuntimeLive = Layer.effect(
+  WorkflowRuntime,
+  makeWorkflowRuntime(),
+)
+```
+
 ## Service Helpers
 
 The active Effect v4 beta source uses `Context.Service` for service keys. Use

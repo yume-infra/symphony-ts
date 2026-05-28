@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 13
-- **Last Active**: 2026-05-26
+- **Total Sessions**: 14
+- **Last Active**: 2026-05-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~465 | Active |
+| `journal-1.md` | ~496 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-05-28 | Effect native audit first pass | - | `main` |
 | 13 | 2026-05-26 | Effect source pin verifier | `86c70be3d` | `main` |
 | 12 | 2026-05-26 | Effect v4 infrastructure baseline | `94b8f53a0` | `main` |
 | 11 | 2026-05-14 | Real Codex turn dispatch acceptance | `4e61419f0` | `main` |

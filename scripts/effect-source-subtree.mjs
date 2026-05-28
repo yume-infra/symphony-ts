@@ -83,7 +83,12 @@ function assertNoVendoredImports(errors) {
   const sourceFiles = trackedFiles().filter(isApplicationSource)
 
   for (const file of sourceFiles) {
-    const text = readFileSync(join(root, file), 'utf8')
+    const filePath = join(root, file)
+    if (!existsSync(filePath)) {
+      continue
+    }
+
+    const text = readFileSync(filePath, 'utf8')
     if (hasVendoredImport(text)) {
       errors.push(`${file} imports from ${manifest.prefix}; use package dependencies instead.`)
     }

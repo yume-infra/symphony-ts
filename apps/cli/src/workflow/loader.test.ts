@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Effect } from 'effect'
-import { describe, expect, it } from 'vitest'
-import { runEffect } from '../../tests/support/effect.js'
-import { createFakeWorkspace } from '../../tests/support/fakes/workspace.js'
+import * as NodeServices from '@effect/platform-node/NodeServices'
+import { describe, expect, it } from '@effect/vitest'
+import { Effect, FileSystem, Layer } from 'effect'
+import { withFakeWorkspace } from '../../tests/support/fakes/workspace.js'
 import { parseWorkflowSource, selectWorkflowPath, WorkflowLoader, WorkflowLoaderLive } from './loader.js'
+
+const workflowLoaderTestLayer = Layer.merge(WorkflowLoaderLive, NodeServices.layer)
 
 describe('workflowLoader', () => {
   it('selects an explicit workflow path or cwd WORKFLOW.md default', () => {
@@ -12,19 +13,21 @@ describe('workflowLoader', () => {
     expect(selectWorkflowPath(undefined, '/repo')).toBe('/repo/WORKFLOW.md')
   })
 
-  it('parses Markdown with no front matter as an empty-config workflow', async () => {
-    const workflow = await runEffect(parseWorkflowSource('Do {{ issue.identifier }}', '/repo/WORKFLOW.md'))
+  it.effect('parses Markdown with no front matter as an empty-config workflow', () =>
+    Effect.gen(function* () {
+      const workflow = yield* parseWorkflowSource('Do {{ issue.identifier }}', '/repo/WORKFLOW.md')
 
-    expect(workflow).toMatchObject({
-      path: '/repo/WORKFLOW.md',
-      directory: '/repo',
-      config: {},
-      promptTemplate: 'Do {{ issue.identifier }}',
-    })
-  })
+      expect(workflow).toMatchObject({
+        path: '/repo/WORKFLOW.md',
+        directory: '/repo',
+        config: {},
+        promptTemplate: 'Do {{ issue.identifier }}',
+      })
+    }))
 
-  it('parses YAML front matter maps, arrays, and block scalars', async () => {
-    const workflow = await runEffect(parseWorkflowSource(`---
+  it.effect('parses YAML front matter maps, arrays, and block scalars', () =>
+    Effect.gen(function* () {
+      const workflow = yield* parseWorkflowSource(`---
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
@@ -44,60 +47,70 @@ agent:
 # Prompt
 
 Handle {{ issue.identifier }}
-`, '/repo/WORKFLOW.md'))
+`, '/repo/WORKFLOW.md')
 
-    expect(workflow.config).toMatchObject({
-      tracker: {
-        kind: 'linear',
-        api_key: '$LINEAR_API_KEY',
-        project_slug: 'sym',
-        active_states: ['Todo', 'In Progress'],
-      },
-      hooks: {
-        before_run: 'echo preparing\necho done',
-      },
-      agent: {
-        max_concurrent_agents_by_state: {
-          'Todo': 2,
-          'In Progress': 1,
+      expect(workflow.config).toMatchObject({
+        tracker: {
+          kind: 'linear',
+          api_key: '$LINEAR_API_KEY',
+          project_slug: 'sym',
+          active_states: ['Todo', 'In Progress'],
         },
-      },
-    })
-    expect(workflow.promptTemplate).toBe('# Prompt\n\nHandle {{ issue.identifier }}')
-  })
+        hooks: {
+          before_run: 'echo preparing\necho done\n',
+        },
+        agent: {
+          max_concurrent_agents_by_state: {
+            'Todo': 2,
+            'In Progress': 1,
+          },
+        },
+      })
+      expect(workflow.promptTemplate).toBe('# Prompt\n\nHandle {{ issue.identifier }}')
+    }))
 
-  it('fails non-map front matter with a typed parse error', async () => {
-    const error = await runEffect(Effect.flip(parseWorkflowSource(`---
+  it.effect('fails non-map front matter with a typed parse error', () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(parseWorkflowSource(`---
 - nope
 ---
-Prompt`, '/repo/WORKFLOW.md')))
+Prompt`, '/repo/WORKFLOW.md'))
 
-    expect(error).toMatchObject({
-      code: 'workflow_front_matter_not_a_map',
-      reason: 'front matter must decode to a map',
-    })
-  })
+      expect(error).toMatchObject({
+        code: 'workflow_front_matter_not_a_map',
+        reason: 'front matter must decode to a map',
+      })
+    }))
 
-  it('loads a workflow file through the service layer', async () => {
-    const workspace = await createFakeWorkspace()
+  it.effect('fails invalid YAML front matter with parser diagnostics', () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(parseWorkflowSource(`---
+tracker: first
+tracker: second
+---
+Prompt`, '/repo/WORKFLOW.md'))
 
-    try {
-      await mkdir(join(workspace.path, 'docs'))
-      await writeFile(join(workspace.path, 'docs', 'WORKFLOW.md'), 'Prompt')
+      expect(error).toMatchObject({
+        code: 'workflow_parse_error',
+        reason: 'Map keys must be unique',
+        line: 2,
+      })
+    }))
 
-      const loaded = await runEffect(
-        Effect.gen(function* () {
-          const loader = yield* WorkflowLoader
+  it.effect('loads a workflow file through the service layer', () =>
+    withFakeWorkspace(workspace =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const workflowDirectory = join(workspace.path, 'docs')
+        const workflowPath = join(workflowDirectory, 'WORKFLOW.md')
 
-          return yield* loader.load(join(workspace.path, 'docs', 'WORKFLOW.md'))
-        }),
-        { layer: WorkflowLoaderLive },
-      )
+        yield* fs.makeDirectory(workflowDirectory)
+        yield* fs.writeFileString(workflowPath, 'Prompt')
 
-      expect(loaded.promptTemplate).toBe('Prompt')
-    }
-    finally {
-      await workspace.cleanup()
-    }
-  })
+        const loader = yield* WorkflowLoader
+
+        const loaded = yield* loader.load(workflowPath)
+
+        expect(loaded.promptTemplate).toBe('Prompt')
+      })).pipe(Effect.provide(workflowLoaderTestLayer)))
 })

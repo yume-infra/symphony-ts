@@ -1,11 +1,10 @@
 import type { Issue, ServiceConfig } from '../domain/types.js'
 import type { CodexRunParams, CodexRunResult } from './codex.js'
-import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Effect, Layer } from 'effect'
-import { describe, expect, it } from 'vitest'
-import { runEffect } from '../../tests/support/effect.js'
-import { createFakeWorkspace } from '../../tests/support/fakes/workspace.js'
+import * as NodeServices from '@effect/platform-node/NodeServices'
+import { describe, expect, it } from '@effect/vitest'
+import { Effect, FileSystem, Layer } from 'effect'
+import { withFakeWorkspace } from '../../tests/support/fakes/workspace.js'
 import { PromptRendererLive } from '../prompt/render.js'
 import { LinearTransport, TrackerClient } from '../tracker/linear.js'
 import { WorkspaceManagerLive } from '../workspace/manager.js'
@@ -28,115 +27,81 @@ const issue: Issue = {
 }
 
 describe('agentRunner', () => {
-  it('creates a workspace, renders the prompt, launches Codex from that workspace, and runs after_run', async () => {
-    const root = await createFakeWorkspace()
-    const codexRuns: Array<CodexRunParams> = []
+  it.effect('creates a workspace, renders the prompt, launches Codex from that workspace, and runs after_run', () =>
+    withFakeWorkspace(root =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const codexRuns: Array<CodexRunParams> = []
+        const config = configForRoot(root.path, {
+          promptTemplate: 'Handle {{ issue.identifier }}',
+          afterRun: 'printf after_run > after.log',
+        })
+        const result = yield* runAttempt({
+          issue,
+          attempt: null,
+          config,
+        }).pipe(
+          Effect.provide(runnerTestLayer(codexRuns, [{ ...issue, state: 'Done' }])),
+        )
 
-    try {
-      const config = configForRoot(root.path, {
-        promptTemplate: 'Handle {{ issue.identifier }}',
-        afterRun: 'printf after_run > after.log',
-      })
-      const result = await runEffect(runAttempt({
-        issue,
-        attempt: null,
-        config,
-      }), {
-        layer: Layer.mergeAll(
-          WorkspaceManagerLive,
-          PromptRendererLive,
-          fakeCodex(codexRuns),
-          fakeTracker([{ ...issue, state: 'Done' }]),
-          fakeLinear(),
-        ),
-      })
+        expect(result.workspace.path).toBe(join(root.path, 'SYM-1'))
+        expect(result.session.sessionId).toBe('thread-1-turn-1')
+        expect(result.issue.state).toBe('Done')
+        expect(codexRuns[0]).toMatchObject({
+          cwd: join(root.path, 'SYM-1'),
+          workspacePath: join(root.path, 'SYM-1'),
+          prompt: 'Handle SYM-1',
+        })
+        const afterRunOutput = yield* fs.readFileString(join(root.path, 'SYM-1', 'after.log'))
+        expect(afterRunOutput).toBe('after_run')
+      })).pipe(Effect.provide(NodeServices.layer)))
 
-      expect(result.workspace.path).toBe(join(root.path, 'SYM-1'))
-      expect(result.session.sessionId).toBe('thread-1-turn-1')
-      expect(result.issue.state).toBe('Done')
-      expect(codexRuns[0]).toMatchObject({
-        cwd: join(root.path, 'SYM-1'),
-        workspacePath: join(root.path, 'SYM-1'),
-        prompt: 'Handle SYM-1',
-      })
-      await expect(readFile(join(root.path, 'SYM-1', 'after.log'), 'utf8')).resolves.toBe('after_run')
-    }
-    finally {
-      await root.cleanup()
-    }
-  })
+  it.effect('continues on the same thread while the issue remains active up to max_turns', () =>
+    withFakeWorkspace(root =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const codexRuns: Array<CodexRunParams> = []
+        yield* fs.makeDirectory(join(root.path, 'SYM-1'), { recursive: true })
 
-  it('continues on the same thread while the issue remains active up to max_turns', async () => {
-    const root = await createFakeWorkspace()
-    const codexRuns: Array<CodexRunParams> = []
-
-    try {
-      await mkdir(join(root.path, 'SYM-1'), { recursive: true })
-      const result = await runEffect(runAttempt({
-        issue,
-        attempt: 1,
-        config: {
-          ...configForRoot(root.path),
-          agent: {
-            ...configForRoot(root.path).agent,
-            maxTurns: 2,
+        const baseConfig = configForRoot(root.path)
+        const result = yield* runAttempt({
+          issue,
+          attempt: 1,
+          config: {
+            ...baseConfig,
+            agent: {
+              ...baseConfig.agent,
+              maxTurns: 2,
+            },
           },
-        },
-      }), {
-        layer: Layer.mergeAll(
-          WorkspaceManagerLive,
-          PromptRendererLive,
-          fakeCodex(codexRuns),
-          fakeTracker([
+        }).pipe(
+          Effect.provide(runnerTestLayer(codexRuns, [
             { ...issue, state: 'Todo' },
             { ...issue, state: 'Done' },
-          ]),
-          fakeLinear(),
-        ),
-      })
+          ])),
+        )
 
-      expect(result.turns).toBe(2)
-      expect(codexRuns).toHaveLength(2)
-      expect(codexRuns[1]?.threadId).toBe('thread-1')
-      expect(codexRuns[1]?.prompt).toContain('Continue working on SYM-1')
-    }
-    finally {
-      await root.cleanup()
-    }
-  })
+        expect(result.turns).toBe(2)
+        expect(codexRuns).toHaveLength(2)
+        expect(codexRuns[1]?.threadId).toBe('thread-1')
+        expect(codexRuns[1]?.prompt).toContain('Continue working on SYM-1')
+      })).pipe(Effect.provide(NodeServices.layer)))
 
-  it('is available through the AgentRunner service layer', async () => {
-    const root = await createFakeWorkspace()
+  it.effect('is available through the AgentRunner service layer', () =>
+    withFakeWorkspace(root =>
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
 
-    try {
-      const result = await runEffect(
-        Effect.gen(function* () {
-          const runner = yield* AgentRunner
+        const result = yield* runner.runAttempt({
+          issue,
+          attempt: null,
+          config: configForRoot(root.path),
+        })
 
-          return yield* runner.runAttempt({
-            issue,
-            attempt: null,
-            config: configForRoot(root.path),
-          })
-        }),
-        {
-          layer: Layer.mergeAll(
-            AgentRunnerLive,
-            WorkspaceManagerLive,
-            PromptRendererLive,
-            fakeCodex([]),
-            fakeTracker([{ ...issue, state: 'Done' }]),
-            fakeLinear(),
-          ),
-        },
-      )
-
-      expect(result.session.sessionId).toBe('thread-1-turn-1')
-    }
-    finally {
-      await root.cleanup()
-    }
-  })
+        expect(result.session.sessionId).toBe('thread-1-turn-1')
+      }).pipe(
+        Effect.provide(Layer.merge(AgentRunnerLive, runnerTestLayer([], [{ ...issue, state: 'Done' }]))),
+      )).pipe(Effect.provide(NodeServices.layer)))
 })
 
 function configForRoot(
@@ -202,6 +167,19 @@ function fakeCodex(calls: Array<CodexRunParams>): Layer.Layer<CodexAppServerClie
         }
       }),
   })
+}
+
+function runnerTestLayer(
+  codexCalls: Array<CodexRunParams>,
+  refreshedIssues: ReadonlyArray<Issue>,
+) {
+  return Layer.mergeAll(
+    WorkspaceManagerLive,
+    PromptRendererLive,
+    fakeCodex(codexCalls),
+    fakeTracker(refreshedIssues),
+    fakeLinear(),
+  )
 }
 
 function fakeTracker(refreshedIssues: ReadonlyArray<Issue>): Layer.Layer<TrackerClient> {

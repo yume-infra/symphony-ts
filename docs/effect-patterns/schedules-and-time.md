@@ -26,6 +26,27 @@ const fetchIssue = (id: LinearIssueId) =>
 Use typed timeout errors so callers can decide whether to retry, reconcile, or
 surface an operator-visible failure.
 
+## Clock Reads
+
+Runtime code that needs the current wall-clock time should use Effect's `Clock`
+service:
+
+```ts
+import { Clock, Effect } from "effect"
+
+const emitHeartbeat = Effect.gen(function*() {
+  const nowMs = yield* Clock.currentTimeMillis
+
+  return { event: "heartbeat", timestamp: nowMs }
+})
+```
+
+Do not call `Date.now()` inside Effect runtime modules for protocol deadlines,
+poll snapshots, emitted runtime events, retry due times, or stall detection.
+Using `Clock.currentTimeMillis` keeps time under the Effect environment, which
+lets `@effect/vitest` tests use `TestClock` for deterministic assertions and
+keeps live-time requirements explicit through `it.live`.
+
 ## Polling
 
 Polling loops should be scoped fibers:
@@ -65,6 +86,8 @@ test clock helpers instead of sleeping real time.
 - Use `Schedule.spaced` for fixed polling intervals.
 - Use `Schedule.exponential` plus jitter for external API retry.
 - Use `Effect.timeoutFail` for operation-level deadlines with typed errors.
+- Use `Clock.currentTimeMillis` for runtime wall-clock reads instead of
+  `Date.now()`.
 - Keep the schedule definition named and near the integration boundary.
 
 ## References

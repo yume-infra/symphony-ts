@@ -44,6 +44,36 @@ const readWorkflow = (path: string) =>
 Do not catch unknown errors deep inside business logic and convert everything to
 `Error`. The typed error should explain the operation that failed.
 
+## Best-Effort Recovery
+
+Best-effort recovery may return `null`, `[]`, or `void` only when the caller can safely continue. If
+the recovered error came from an external system or changes operator-visible behavior, log a
+structured warning before returning the fallback value:
+
+```ts
+const issues = yield* tracker.fetchIssueStatesByIds(config, ids).pipe(
+  Effect.catch((error) =>
+    logger.warn("running_reconciliation_refresh_failed", {
+      operation: "fetch_issue_states_by_ids",
+      issue_count: ids.length,
+      error_code: error.code,
+      reason: error.reason
+    }).pipe(
+      Effect.andThen(Effect.succeed<ReadonlyArray<Issue>>([]))
+    )
+  )
+)
+```
+
+Low-level cleanup services should not depend directly on the runtime logger just to report
+best-effort failures. Instead, accept a failure callback that receives a typed error plus stable
+operation context. The caller that owns operational context should wire that callback to
+`RuntimeLogger`.
+
+Workspace cleanup follows this shape: `WorkspaceManager` keeps `after_run`, `before_remove`, and
+remove-directory failures best-effort, while the orchestrator passes callbacks that emit structured
+warnings.
+
 ## Error Categories
 
 Use distinct tagged errors for the main Symphony boundaries:

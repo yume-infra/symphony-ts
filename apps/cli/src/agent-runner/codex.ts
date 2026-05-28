@@ -1,8 +1,10 @@
+import type * as Scope from 'effect/Scope'
 import type { CodexConfig, Issue, ServiceConfig } from '../domain/types.js'
 import type { LinearTransportShape } from '../tracker/linear.js'
 import { Buffer } from 'node:buffer'
-import { spawn } from 'node:child_process'
-import { Context, Effect, Layer } from 'effect'
+import * as NodeServices from '@effect/platform-node/NodeServices'
+import { Clock, Context, Effect, Layer, Queue, Ref, Schema, Stream } from 'effect'
+import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { executeLinearGraphQLTool } from '../client-tools/linear-graphql.js'
 import { CodexError } from '../domain/errors.js'
 import { LinearTransport } from '../tracker/linear.js'
@@ -71,6 +73,34 @@ export interface CodexProtocolScript {
   readonly nextMessage: () => unknown
 }
 
+interface CodexProtocolSession {
+  readonly processId: string | null
+  readonly send: (message: CodexProtocolMessage) => Effect.Effect<void, CodexError>
+  readonly nextMessage: Effect.Effect<unknown, CodexError>
+}
+
+type ProtocolStage = 'initialize' | 'thread startup' | 'turn/start'
+
+interface PendingProtocolRequest {
+  readonly id: JsonRpcId
+  readonly stage: ProtocolStage
+  readonly deadlineMs: number
+}
+
+type ProcessProtocolEvent
+  = | {
+    readonly _tag: 'message'
+    readonly message: CodexProtocolMessage
+  }
+  | {
+    readonly _tag: 'failure'
+    readonly error: CodexError
+  }
+  | {
+    readonly _tag: 'exit'
+    readonly exitCode: number | null
+  }
+
 export interface CodexAppServerClientShape {
   readonly runTurn: (
     params: CodexRunParams,
@@ -81,10 +111,6 @@ export class CodexAppServerClient extends Context.Service<CodexAppServerClient, 
   'symphony/CodexAppServerClient',
 ) {}
 
-export const CodexAppServerClientLive = Layer.succeed(CodexAppServerClient)({
-  runTurn: runCodexProcessTurn,
-})
-
 const CLIENT_INFO = {
   name: 'symphony-ts',
   version: '0.0.0',
@@ -93,6 +119,34 @@ const CLIENT_INFO = {
 const MAX_PROTOCOL_LINE_BYTES = 10 * 1024 * 1024
 const JSON_RPC_APPLICATION_ERROR = -32000
 const JSON_RPC_METHOD_NOT_FOUND = -32601
+const JsonRpcIdSchema = Schema.Union([Schema.Number, Schema.String])
+const JsonRpcRequestSchema = Schema.Struct({
+  id: JsonRpcIdSchema,
+  method: Schema.String,
+  params: Schema.optionalKey(Schema.Unknown),
+})
+const JsonRpcResponseSchema = Schema.Union([
+  Schema.Struct({
+    id: JsonRpcIdSchema,
+    result: Schema.Unknown,
+  }),
+  Schema.Struct({
+    id: JsonRpcIdSchema,
+    error: Schema.Unknown,
+  }),
+])
+const JsonRpcNotificationSchema = Schema.Struct({
+  method: Schema.String,
+  params: Schema.optionalKey(Schema.Unknown),
+})
+const CodexProtocolMessageFromJsonString = Schema.fromJsonString(Schema.Union([
+  JsonRpcRequestSchema,
+  JsonRpcResponseSchema,
+  JsonRpcNotificationSchema,
+]))
+const decodeProtocolMessageLine = Schema.decodeUnknownEffect(CodexProtocolMessageFromJsonString)
+const encodeProtocolMessageLine = Schema.encodeUnknownEffect(CodexProtocolMessageFromJsonString)
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.UnknownFromJsonString)
 
 interface DynamicToolResponse {
   readonly success: boolean
@@ -116,79 +170,376 @@ interface TurnState {
   rateLimits: unknown
 }
 
-export function runCodexScriptTurn(
-  script: CodexProtocolScript,
+const validateWorkspaceCwdEffect = Effect.fn('validateWorkspaceCwdEffect')((params: CodexRunParams): Effect.Effect<void, CodexError> =>
+  Effect.try({
+    try: () => validateWorkspaceCwd(params),
+    catch: cause => cause instanceof CodexError
+      ? cause
+      : new CodexError({
+          code: 'invalid_workspace_cwd',
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+  }))
+
+const responseTimeout = Effect.fn('responseTimeout')((
   params: CodexRunParams,
-): Effect.Effect<CodexRunResult, CodexError, LinearTransport> {
-  return Effect.gen(function* () {
-    yield* validateWorkspaceCwdEffect(params)
+  state: TurnState,
+  stage: string,
+): Effect.Effect<never, CodexError> =>
+  Effect.fail(new CodexError({
+    code: 'response_timeout',
+    reason: `Codex app-server did not answer ${stage} within ${params.config.readTimeoutMs}ms`,
+    sessionId: state.sessionId ?? undefined,
+  })))
 
-    const state = createTurnState(params)
-    let nextId = 1
-    const initializeId = nextId++
-    let threadRequestId: JsonRpcId | null = null
-    let turnRequestId: JsonRpcId | null = null
+const readProtocolMessage = Effect.fn('readProtocolMessage')((
+  session: CodexProtocolSession,
+  params: CodexRunParams,
+  state: TurnState,
+  pendingRequest: PendingProtocolRequest | null,
+): Effect.Effect<unknown, CodexError> => {
+  if (pendingRequest === null) {
+    return session.nextMessage
+  }
 
-    script.send(initializeRequest(initializeId))
+  return Clock.currentTimeMillis.pipe(
+    Effect.flatMap((nowMs) => {
+      const remainingMs = pendingRequest.deadlineMs - nowMs
 
+      if (remainingMs <= 0) {
+        return responseTimeout(params, state, pendingRequest.stage)
+      }
+
+      return session.nextMessage.pipe(
+        Effect.timeoutOrElse({
+          duration: remainingMs,
+          orElse: () => responseTimeout(params, state, pendingRequest.stage),
+        }),
+      )
+    }),
+  )
+})
+
+const encodeProtocolMessage = Effect.fn('encodeProtocolMessage')((message: CodexProtocolMessage): Effect.Effect<Uint8Array, CodexError> =>
+  encodeProtocolMessageLine(message).pipe(
+    Effect.map(line => Buffer.from(`${line}\n`, 'utf8')),
+    Effect.mapError(cause => new CodexError({
+      code: 'response_error',
+      reason: 'failed to serialize Codex JSON-RPC message',
+      cause,
+    })),
+  ))
+
+const enqueueProcessLine = Effect.fn('enqueueProcessLine')((
+  inbound: Queue.Enqueue<ProcessProtocolEvent>,
+  line: string,
+): Effect.Effect<boolean> => {
+  if (line.trim() === '') {
+    return Effect.succeed(true)
+  }
+
+  if (Buffer.byteLength(line, 'utf8') > MAX_PROTOCOL_LINE_BYTES) {
+    return Queue.offer(inbound, {
+      _tag: 'failure',
+      error: new CodexError({
+        code: 'malformed_message',
+        reason: `Codex app-server protocol line exceeded ${MAX_PROTOCOL_LINE_BYTES} bytes`,
+      }),
+    })
+  }
+
+  return decodeProtocolMessageLine(line).pipe(
+    Effect.matchEffect({
+      onFailure: cause => Queue.offer(inbound, {
+        _tag: 'failure',
+        error: new CodexError({
+          code: 'malformed_message',
+          reason: 'Codex app-server emitted malformed or unsupported JSON-RPC',
+          cause,
+        }),
+      }),
+      onSuccess: message => Queue.offer(inbound, {
+        _tag: 'message',
+        message: message as CodexProtocolMessage,
+      }),
+    }),
+  )
+})
+
+const emit = Effect.fn('emit')((params: CodexRunParams, event: CodexRuntimeEvent): Effect.Effect<void> =>
+  params.onEvent?.(event) ?? Effect.void)
+
+const maybeEmitSessionStarted = Effect.fn('maybeEmitSessionStarted')((
+  params: CodexRunParams,
+  state: TurnState,
+  processId: string | null,
+): Effect.Effect<void> => {
+  if (!tryMarkSessionStarted(state)) {
+    return Effect.void
+  }
+
+  return Clock.currentTimeMillis.pipe(
+    Effect.flatMap(timestamp => emit(params, makeEvent(
+      'session_started',
+      timestamp,
+      state.sessionId,
+      {
+        threadId: state.threadId,
+        turnId: state.turnId,
+        ...(processId === null ? {} : { pid: processId }),
+      },
+      state.usage,
+      state.rateLimits,
+    ))),
+  )
+})
+
+const failOnJsonRpcError = Effect.fn('failOnJsonRpcError')((
+  message: JsonRpcResponse,
+  label: string,
+  sessionId: string | null,
+): Effect.Effect<void, CodexError> => {
+  if (message.error === undefined) {
+    return Effect.void
+  }
+
+  return Effect.fail(new CodexError({
+    code: 'response_error',
+    reason: `${label} failed: ${formatJsonRpcError(message.error)}`,
+    sessionId: sessionId ?? undefined,
+    cause: message.error,
+  }))
+})
+
+const emitProtocolEvent = Effect.fn('emitProtocolEvent')((
+  session: CodexProtocolSession,
+  params: CodexRunParams,
+  state: TurnState,
+  event: string,
+  payload: Record<string, unknown>,
+): Effect.Effect<void> =>
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap(timestamp => emit(params, makeEvent(
+      event,
+      timestamp,
+      state.sessionId,
+      session.processId === null
+        ? payload
+        : {
+            ...payload,
+            pid: session.processId,
+          },
+      state.usage,
+      state.rateLimits,
+    ))),
+  ))
+
+const executeDynamicToolCall = Effect.fn('executeDynamicToolCall')(function* (
+  params: CodexRunParams,
+  requestParams: unknown,
+): Effect.fn.Return<DynamicToolExecution, never, LinearTransport> {
+  const payload = isRecord(requestParams) ? requestParams : {}
+  const toolName = stringValue(payload.tool) ?? stringValue(payload.name)
+  const toolInput = 'arguments' in payload
+    ? payload.arguments
+    : 'input' in payload
+      ? payload.input
+      : undefined
+
+  if (toolName === 'linear_graphql') {
+    const result = yield* executeLinearGraphQLTool(params.serviceConfig, toolInput)
+
+    return {
+      event: 'tool_call',
+      response: dynamicToolResponse(result.success, result),
+    }
+  }
+
+  const result = {
+    success: false,
+    error: {
+      code: 'unsupported_tool_call',
+      message: `Unsupported tool: ${toolName ?? 'unknown'}`,
+    },
+  }
+
+  return {
+    event: 'unsupported_tool_call',
+    response: dynamicToolResponse(false, result),
+  }
+})
+
+const handleProtocolServerRequest = Effect.fn('handleProtocolServerRequest')(function* (
+  session: CodexProtocolSession,
+  params: CodexRunParams,
+  state: TurnState,
+  message: JsonRpcRequest,
+): Effect.fn.Return<void, CodexError, LinearTransport> {
+  const payload = isRecord(message.params) ? message.params : {}
+
+  if (message.method === 'item/tool/call') {
+    const result = yield* executeDynamicToolCall(params, message.params)
+
+    yield* session.send({
+      id: message.id,
+      result: result.response,
+    })
+    yield* emitProtocolEvent(session, params, state, result.event, payload)
+    return
+  }
+
+  if (message.method === 'item/tool/requestUserInput') {
+    yield* session.send(jsonRpcError(
+      message.id,
+      JSON_RPC_APPLICATION_ERROR,
+      'Symphony does not support interactive user input during Codex turns',
+    ))
+
+    return yield* new CodexError({
+      code: 'turn_input_required',
+      reason: 'Codex requested user input; first-pass Symphony fails rather than stalling',
+      sessionId: state.sessionId ?? undefined,
+    })
+  }
+
+  if (isApprovalRequestMethod(message.method)) {
+    const result = approvalApprovalResult(message.method, payload)
+
+    yield* session.send(result === null
+      ? jsonRpcError(message.id, JSON_RPC_APPLICATION_ERROR, `Symphony does not support approval request: ${message.method}`)
+      : jsonRpcResult(message.id, result))
+    yield* emitProtocolEvent(session, params, state, result === null ? 'approval_unsupported' : 'approval_granted', payload)
+    return
+  }
+
+  yield* session.send(jsonRpcError(
+    message.id,
+    JSON_RPC_METHOD_NOT_FOUND,
+    `Unsupported Codex server request method: ${message.method}`,
+  ))
+
+  return yield* new CodexError({
+    code: 'response_error',
+    reason: `unsupported Codex server request method: ${message.method}`,
+    sessionId: state.sessionId ?? undefined,
+  })
+})
+
+const handleProtocolNotification = Effect.fn('handleProtocolNotification')(function* (
+  session: CodexProtocolSession,
+  params: CodexRunParams,
+  state: TurnState,
+  message: JsonRpcNotification,
+): Effect.fn.Return<CodexRunResult | null, CodexError> {
+  const payload = isRecord(message.params) ? message.params : {}
+
+  updateStateFromNotification(state, message)
+  yield* maybeEmitSessionStarted(params, state, session.processId)
+
+  if (message.method === 'thread/tokenUsage/updated') {
+    state.usage = extractUsage(payload) ?? state.usage
+  }
+
+  if (message.method === 'account/rateLimits/updated') {
+    state.rateLimits = extractRateLimits(payload)
+  }
+
+  yield* emitProtocolEvent(session, params, state, message.method, payload)
+
+  if (message.method === 'error') {
+    return yield* new CodexError({
+      code: 'response_error',
+      reason: stringValue(payload.message) ?? 'Codex app-server emitted an error notification',
+      sessionId: state.sessionId ?? undefined,
+    })
+  }
+
+  if (message.method !== 'turn/completed') {
+    return null
+  }
+
+  const completion = completionFromTurnPayload(params, state, message.params)
+
+  if (completion instanceof CodexError) {
+    return yield* completion
+  }
+
+  return completion
+})
+
+const runCodexProtocolTurn = Effect.fn('runCodexProtocolTurn')(function* (
+  session: CodexProtocolSession,
+  params: CodexRunParams,
+): Effect.fn.Return<CodexRunResult, CodexError, LinearTransport> {
+  yield* validateWorkspaceCwdEffect(params)
+
+  const state = createTurnState(params)
+  let nextId = 1
+  let pendingRequest: PendingProtocolRequest | null = null
+
+  yield* sendProtocolRequest('initialize', initializeParams(), 'initialize')
+
+  const runProtocolLoop = Effect.fn('runCodexProtocolTurn.loop')(function* (): Effect.fn.Return<CodexRunResult, CodexError, LinearTransport> {
     while (true) {
-      const message = yield* readScriptMessage(script)
+      const message = yield* readProtocolMessage(session, params, state, pendingRequest)
 
       if (isJsonRpcResponse(message)) {
-        if (idsEqual(message.id, initializeId)) {
-          yield* failOnJsonRpcError(message, 'initialize')
-          threadRequestId = nextId++
-          script.send(threadRequest(threadRequestId, params))
+        if (pendingRequest === null || !idsEqual(message.id, pendingRequest.id)) {
+          return yield* new CodexError({
+            code: 'response_error',
+            reason: `unexpected JSON-RPC response id: ${String(message.id)}`,
+            sessionId: state.sessionId ?? undefined,
+          })
+        }
+
+        const request = pendingRequest
+        pendingRequest = null
+
+        yield* failOnJsonRpcError(message, request.stage, state.sessionId)
+
+        if (request.stage === 'initialize') {
+          yield* sendProtocolRequest(threadRequestMethod(params), threadRequestParams(params), 'thread startup')
           continue
         }
 
-        if (threadRequestId !== null && idsEqual(message.id, threadRequestId)) {
-          yield* failOnJsonRpcError(message, 'thread startup')
+        if (request.stage === 'thread startup') {
           state.threadId = extractThreadId(message.result) ?? state.threadId
 
           if (state.threadId === null) {
             return yield* new CodexError({
               code: 'response_error',
               reason: 'thread/start or thread/resume response did not include thread identity',
+              sessionId: state.sessionId ?? undefined,
             })
           }
 
-          turnRequestId = nextId++
-          script.send(turnStartRequest(turnRequestId, params, state.threadId))
+          yield* sendProtocolRequest('turn/start', turnStartParams(params, state.threadId), 'turn/start')
           continue
         }
 
-        if (turnRequestId !== null && idsEqual(message.id, turnRequestId)) {
-          yield* failOnJsonRpcError(message, 'turn/start')
-          updateThreadAndTurnFromPayload(state, message.result)
-          yield* maybeEmitSessionStarted(params, state)
+        updateThreadAndTurnFromPayload(state, message.result)
+        yield* maybeEmitSessionStarted(params, state, session.processId)
 
-          const completion = completionFromTurnPayload(params, state, message.result)
+        const completion = completionFromTurnPayload(params, state, message.result)
 
-          if (completion instanceof CodexError) {
-            return yield* completion
-          }
-
-          if (completion !== null) {
-            return completion
-          }
-
-          continue
+        if (completion instanceof CodexError) {
+          return yield* completion
         }
 
-        return yield* new CodexError({
-          code: 'response_error',
-          reason: `unexpected JSON-RPC response id: ${String(message.id)}`,
-        })
+        if (completion !== null) {
+          return completion
+        }
+
+        continue
       }
 
       if (isJsonRpcRequest(message)) {
-        yield* handleScriptServerRequest(script, params, state, message)
+        yield* handleProtocolServerRequest(session, params, state, message)
         continue
       }
 
       if (isJsonRpcNotification(message)) {
-        const completion = yield* handleScriptNotification(params, state, message)
+        const completion = yield* handleProtocolNotification(session, params, state, message)
 
         if (completion !== null) {
           return completion
@@ -200,575 +551,211 @@ export function runCodexScriptTurn(
       return yield* new CodexError({
         code: 'malformed_message',
         reason: 'Codex app-server emitted an unsupported JSON-RPC message shape',
+        sessionId: state.sessionId ?? undefined,
       })
     }
   })
-}
-
-function runCodexProcessTurn(
-  params: CodexRunParams,
-): Effect.Effect<CodexRunResult, CodexError, LinearTransport> {
-  return Effect.gen(function* () {
-    const linearTransport = yield* LinearTransport
-
-    return yield* runCodexProcessTurnWithTransport(params, linearTransport)
-  })
-}
-
-function runCodexProcessTurnWithTransport(
-  params: CodexRunParams,
-  linearTransport: LinearTransportShape,
-): Effect.Effect<CodexRunResult, CodexError> {
-  return Effect.callback<CodexRunResult, CodexError>((resume) => {
-    try {
-      validateWorkspaceCwd(params)
-    }
-    catch (cause) {
-      resume(Effect.fail(cause instanceof CodexError
-        ? cause
-        : new CodexError({
-            code: 'invalid_workspace_cwd',
-            reason: cause instanceof Error ? cause.message : String(cause),
-          })))
-      return
-    }
-
-    const child = spawn('bash', ['-lc', params.command], {
-      cwd: params.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    const state = createTurnState(params)
-    const pendingResponses = new Map<JsonRpcId, (message: JsonRpcResponse) => void>()
-    let settled = false
-    let nextId = 1
-    let buffer = ''
-    let stderrTail = ''
-    let readTimeout: ReturnType<typeof setTimeout> | null = null
-    const turnTimeout = setTimeout(() => {
-      settleFailure(new CodexError({
+  const result = yield* runProtocolLoop().pipe(
+    Effect.timeoutOrElse({
+      duration: params.config.turnTimeoutMs,
+      orElse: () => Effect.fail(new CodexError({
         code: 'turn_timeout',
         reason: `Codex turn timed out after ${params.config.turnTimeoutMs}ms`,
         sessionId: state.sessionId ?? undefined,
-      }))
-    }, params.config.turnTimeoutMs)
+      })),
+    }),
+  )
 
-    child.on('error', cause => settleFailure(new CodexError({
+  return result
+
+  function sendProtocolRequest(
+    method: string,
+    requestParams: Record<string, unknown>,
+    stage: ProtocolStage,
+  ): Effect.Effect<void, CodexError> {
+    const id = nextId++
+
+    return Clock.currentTimeMillis.pipe(
+      Effect.flatMap((nowMs) => {
+        pendingRequest = {
+          id,
+          stage,
+          deadlineMs: nowMs + params.config.readTimeoutMs,
+        }
+
+        return session.send({
+          id,
+          method,
+          params: requestParams,
+        })
+      }),
+    )
+  }
+})
+
+export const runCodexScriptTurn = Effect.fn('runCodexScriptTurn')(function* (
+  script: CodexProtocolScript,
+  params: CodexRunParams,
+): Effect.fn.Return<CodexRunResult, CodexError, LinearTransport> {
+  const session = scriptProtocolSession(script)
+
+  return yield* runCodexProtocolTurn(session, params)
+})
+
+const makeCodexProcessSession = Effect.fn('makeCodexProcessSession')(function* (
+  params: CodexRunParams,
+): Effect.fn.Return<CodexProtocolSession, CodexError, ChildProcessSpawner.ChildProcessSpawner | Scope.Scope> {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const outbound = yield* Queue.unbounded<Uint8Array>()
+  const inbound = yield* Queue.unbounded<ProcessProtocolEvent>()
+  const stderrTail = yield* Ref.make('')
+  const command = ChildProcess.make('bash', ['-lc', params.command], {
+    cwd: params.cwd,
+    stdin: {
+      stream: Stream.fromQueue(outbound),
+      endOnDone: false,
+    },
+    stdout: 'pipe',
+    stderr: 'pipe',
+    killSignal: 'SIGTERM',
+    forceKillAfter: '1 second',
+  })
+  const handle = yield* spawner.spawn(command).pipe(
+    Effect.mapError(cause => new CodexError({
       code: 'codex_not_found',
       reason: 'failed to start Codex app-server command',
       cause,
-    })))
-    child.on('exit', (code) => {
-      if (!settled) {
-        settleFailure(new CodexError({
+    })),
+  )
+
+  yield* Effect.addFinalizer(() =>
+    Effect.all([
+      Queue.shutdown(outbound),
+      Queue.shutdown(inbound),
+    ], { discard: true }),
+  )
+
+  yield* handle.stdout.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.runForEach(line => enqueueProcessLine(inbound, line)),
+    Effect.catch(cause => Queue.offer(inbound, {
+      _tag: 'failure',
+      error: new CodexError({
+        code: 'response_error',
+        reason: 'failed to read Codex app-server stdout',
+        cause,
+      }),
+    })),
+    Effect.forkScoped,
+  )
+
+  yield* handle.stderr.pipe(
+    Stream.runForEach(chunk =>
+      Ref.update(stderrTail, value => truncateDiagnostic(`${value}${Buffer.from(chunk).toString('utf8')}`)),
+    ),
+    Effect.catch(cause =>
+      Ref.update(stderrTail, value => truncateDiagnostic(`${value}\nfailed to read stderr: ${String(cause)}`)),
+    ),
+    Effect.forkScoped,
+  )
+
+  yield* handle.exitCode.pipe(
+    Effect.matchEffect({
+      onFailure: cause => Queue.offer(inbound, {
+        _tag: 'failure',
+        error: new CodexError({
           code: 'process_exit',
-          reason: processExitReason(code, stderrTail),
-          sessionId: state.sessionId ?? undefined,
-        }))
-      }
-    })
-    child.stdin?.on('error', cause => settleFailure(new CodexError({
-      code: 'response_error',
-      reason: 'failed to write to Codex app-server stdin',
-      cause,
-      sessionId: state.sessionId ?? undefined,
-    })))
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrTail = truncateDiagnostic(`${stderrTail}${chunk.toString('utf8')}`)
-    })
-    child.stdout?.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8')
-
-      if (Buffer.byteLength(buffer, 'utf8') > MAX_PROTOCOL_LINE_BYTES) {
-        settleFailure(new CodexError({
-          code: 'malformed_message',
-          reason: `Codex app-server protocol line exceeded ${MAX_PROTOCOL_LINE_BYTES} bytes`,
-          sessionId: state.sessionId ?? undefined,
-        }))
-        return
-      }
-
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        if (line.trim() === '' || settled) {
-          continue
-        }
-
-        handleProcessLine(line)
-      }
-    })
-
-    sendRequest('initialize', initializeParams(), (message) => {
-      if (!finishJsonRpcResponse(message, 'initialize')) {
-        return
-      }
-
-      sendRequest(threadRequestMethod(params), threadRequestParams(params), (threadMessage) => {
-        if (!finishJsonRpcResponse(threadMessage, 'thread startup')) {
-          return
-        }
-
-        state.threadId = extractThreadId(threadMessage.result) ?? state.threadId
-
-        if (state.threadId === null) {
-          settleFailure(new CodexError({
-            code: 'response_error',
-            reason: 'thread/start or thread/resume response did not include thread identity',
-          }))
-          return
-        }
-
-        sendRequest('turn/start', turnStartParams(params, state.threadId), (turnMessage) => {
-          if (!finishJsonRpcResponse(turnMessage, 'turn/start')) {
-            return
-          }
-
-          updateThreadAndTurnFromPayload(state, turnMessage.result)
-          emitSessionStartedFromProcess()
-          settleTerminalPayload(turnMessage.result)
-        })
-      })
-    })
-
-    function sendRequest(
-      method: string,
-      requestParams: Record<string, unknown>,
-      onResponse: (message: JsonRpcResponse) => void,
-    ): void {
-      if (settled) {
-        return
-      }
-
-      const id = nextId++
-      pendingResponses.set(id, onResponse)
-      armReadTimeout(method)
-      sendMessage({
-        id,
-        method,
-        params: requestParams,
-      })
-    }
-
-    function sendResult(id: JsonRpcId, result: unknown): void {
-      sendMessage({ id, result })
-    }
-
-    function sendError(id: JsonRpcId, code: number, message: string, data?: unknown): void {
-      sendMessage({
-        id,
-        error: data === undefined
-          ? { code, message }
-          : { code, message, data },
-      })
-    }
-
-    function sendMessage(message: CodexProtocolMessage): void {
-      if (settled || child.stdin === null || child.stdin.destroyed) {
-        return
-      }
-
-      child.stdin.write(`${JSON.stringify(message)}\n`)
-    }
-
-    function handleProcessLine(line: string): void {
-      let parsed: unknown
-
-      try {
-        parsed = JSON.parse(line)
-      }
-      catch (cause) {
-        settleFailure(new CodexError({
-          code: 'malformed_message',
-          reason: 'Codex app-server emitted malformed JSON',
+          reason: 'Codex app-server exited before turn completion',
           cause,
-          sessionId: state.sessionId ?? undefined,
-        }))
-        return
-      }
-
-      if (isJsonRpcResponse(parsed)) {
-        const handler = pendingResponses.get(parsed.id)
-
-        if (handler === undefined) {
-          settleFailure(new CodexError({
-            code: 'response_error',
-            reason: `unexpected JSON-RPC response id: ${String(parsed.id)}`,
-            sessionId: state.sessionId ?? undefined,
-          }))
-          return
-        }
-
-        pendingResponses.delete(parsed.id)
-        clearReadTimeout()
-        handler(parsed)
-        return
-      }
-
-      if (isJsonRpcRequest(parsed)) {
-        handleProcessServerRequest(parsed)
-        return
-      }
-
-      if (isJsonRpcNotification(parsed)) {
-        handleProcessNotification(parsed)
-        return
-      }
-
-      settleFailure(new CodexError({
-        code: 'malformed_message',
-        reason: 'Codex app-server emitted an unsupported JSON-RPC message shape',
-        sessionId: state.sessionId ?? undefined,
-      }))
-    }
-
-    function handleProcessServerRequest(message: JsonRpcRequest): void {
-      const payload = isRecord(message.params) ? message.params : {}
-
-      if (message.method === 'item/tool/call') {
-        void Effect.runPromise(
-          executeDynamicToolCall(params, message.params).pipe(
-            Effect.provideService(LinearTransport, linearTransport),
-          ),
-        ).then((result) => {
-          if (settled) {
-            return
-          }
-
-          sendResult(message.id, result.response)
-          emitProcessEvent(result.event, payload)
-        }).catch(cause => settleFailure(new CodexError({
-          code: 'response_error',
-          reason: 'failed to execute Codex dynamic tool call',
-          cause,
-          sessionId: state.sessionId ?? undefined,
-        })))
-        return
-      }
-
-      if (message.method === 'item/tool/requestUserInput') {
-        sendError(
-          message.id,
-          JSON_RPC_APPLICATION_ERROR,
-          'Symphony does not support interactive user input during Codex turns',
-        )
-        settleFailure(new CodexError({
-          code: 'turn_input_required',
-          reason: 'Codex requested user input; first-pass Symphony fails rather than stalling',
-          sessionId: state.sessionId ?? undefined,
-        }))
-        return
-      }
-
-      if (isApprovalRequestMethod(message.method)) {
-        const result = approvalApprovalResult(message.method, payload)
-
-        if (result === null) {
-          sendError(
-            message.id,
-            JSON_RPC_APPLICATION_ERROR,
-            `Symphony does not support approval request: ${message.method}`,
-          )
-        }
-        else {
-          sendResult(message.id, result)
-        }
-
-        emitProcessEvent(result === null ? 'approval_unsupported' : 'approval_granted', payload)
-        return
-      }
-
-      sendError(
-        message.id,
-        JSON_RPC_METHOD_NOT_FOUND,
-        `Unsupported Codex server request method: ${message.method}`,
-      )
-      settleFailure(new CodexError({
-        code: 'response_error',
-        reason: `unsupported Codex server request method: ${message.method}`,
-        sessionId: state.sessionId ?? undefined,
-      }))
-    }
-
-    function handleProcessNotification(message: JsonRpcNotification): void {
-      const payload = isRecord(message.params) ? message.params : {}
-
-      updateStateFromNotification(state, message)
-      emitSessionStartedFromProcess()
-
-      if (message.method === 'thread/tokenUsage/updated') {
-        state.usage = extractUsage(payload) ?? state.usage
-      }
-
-      if (message.method === 'account/rateLimits/updated') {
-        state.rateLimits = extractRateLimits(payload)
-      }
-
-      emitProcessEvent(message.method, payload)
-
-      if (message.method === 'error') {
-        settleFailure(new CodexError({
-          code: 'response_error',
-          reason: stringValue(payload.message) ?? 'Codex app-server emitted an error notification',
-          sessionId: state.sessionId ?? undefined,
-        }))
-        return
-      }
-
-      if (message.method === 'turn/completed') {
-        settleTerminalPayload(message.params)
-      }
-    }
-
-    function settleTerminalPayload(payload: unknown): void {
-      const completion = completionFromTurnPayload(params, state, payload)
-
-      if (completion instanceof CodexError) {
-        settleFailure(completion)
-        return
-      }
-
-      if (completion !== null) {
-        settleSuccess(completion)
-      }
-    }
-
-    function finishJsonRpcResponse(message: JsonRpcResponse, label: string): boolean {
-      if (message.error === undefined) {
-        return true
-      }
-
-      settleFailure(new CodexError({
-        code: 'response_error',
-        reason: `${label} failed: ${formatJsonRpcError(message.error)}`,
-        sessionId: state.sessionId ?? undefined,
-        cause: message.error,
-      }))
-      return false
-    }
-
-    function emitSessionStartedFromProcess(): void {
-      if (!tryMarkSessionStarted(state)) {
-        return
-      }
-
-      emitProcessEvent('session_started', {
-        threadId: state.threadId,
-        turnId: state.turnId,
-      })
-    }
-
-    function emitProcessEvent(event: string, payload: Record<string, unknown>): void {
-      const eventPayload = child.pid === undefined
-        ? payload
-        : {
-            ...payload,
-            pid: String(child.pid),
-          }
-
-      void Effect.runPromise(emit(params, makeEvent(event, state.sessionId, eventPayload, state.usage, state.rateLimits)))
-    }
-
-    function armReadTimeout(stage: string): void {
-      clearReadTimeout()
-      readTimeout = setTimeout(() => {
-        settleFailure(new CodexError({
-          code: 'response_timeout',
-          reason: `Codex app-server did not answer ${stage} within ${params.config.readTimeoutMs}ms`,
-          sessionId: state.sessionId ?? undefined,
-        }))
-      }, params.config.readTimeoutMs)
-    }
-
-    function clearReadTimeout(): void {
-      if (readTimeout !== null) {
-        clearTimeout(readTimeout)
-        readTimeout = null
-      }
-    }
-
-    function settleSuccess(result: CodexRunResult): void {
-      if (settled) {
-        return
-      }
-
-      settled = true
-      clearTimeout(turnTimeout)
-      clearReadTimeout()
-      child.kill('SIGTERM')
-      resume(Effect.succeed(result))
-    }
-
-    function settleFailure(error: CodexError): void {
-      if (settled) {
-        return
-      }
-
-      settled = true
-      clearTimeout(turnTimeout)
-      clearReadTimeout()
-      child.kill('SIGTERM')
-      resume(Effect.fail(error))
-    }
-
-    return Effect.sync(() => {
-      clearTimeout(turnTimeout)
-      clearReadTimeout()
-
-      if (!settled) {
-        child.kill('SIGTERM')
-      }
-    })
-  })
-}
-
-function readScriptMessage(script: CodexProtocolScript): Effect.Effect<unknown, CodexError> {
-  return Effect.try({
-    try: () => script.nextMessage(),
-    catch: cause => new CodexError({
-      code: 'response_timeout',
-      reason: cause instanceof Error ? cause.message : String(cause),
-      cause,
+        }),
+      }),
+      onSuccess: exitCode => Queue.offer(inbound, {
+        _tag: 'exit',
+        exitCode: Number(exitCode),
+      }),
     }),
-  })
-}
+    Effect.forkScoped,
+  )
 
-function handleScriptServerRequest(
-  script: CodexProtocolScript,
+  return {
+    processId: String(handle.pid),
+    send: (message: CodexProtocolMessage) => encodeProtocolMessage(message).pipe(
+      Effect.flatMap(buffer => Queue.offer(outbound, buffer)),
+      Effect.andThen(Effect.void),
+    ),
+    nextMessage: Queue.take(inbound).pipe(
+      Effect.flatMap((event) => {
+        if (event._tag === 'message') {
+          return Effect.succeed(event.message)
+        }
+
+        if (event._tag === 'failure') {
+          return Effect.fail(event.error)
+        }
+
+        return Ref.get(stderrTail).pipe(
+          Effect.flatMap(stderr => Effect.fail(new CodexError({
+            code: 'process_exit',
+            reason: processExitReason(event.exitCode, stderr),
+          }))),
+        )
+      }),
+    ),
+  }
+})
+
+const runCodexProcessTurnWithTransport = Effect.fn('runCodexProcessTurnWithTransport')(function* (
   params: CodexRunParams,
-  state: TurnState,
-  message: JsonRpcRequest,
-): Effect.Effect<void, CodexError, LinearTransport> {
-  return Effect.gen(function* () {
-    const payload = isRecord(message.params) ? message.params : {}
+  linearTransport: LinearTransportShape,
+): Effect.fn.Return<CodexRunResult, CodexError> {
+  yield* validateWorkspaceCwdEffect(params)
 
-    if (message.method === 'item/tool/call') {
-      const result = yield* executeDynamicToolCall(params, message.params)
+  return yield* makeCodexProcessSession(params).pipe(
+    Effect.flatMap(session =>
+      runCodexProtocolTurn(session, params).pipe(
+        Effect.provideService(LinearTransport, linearTransport),
+      )),
+    Effect.scoped,
+    Effect.provide(NodeServices.layer),
+  )
+})
 
-      script.send({
-        id: message.id,
-        result: result.response,
-      })
-      yield* emit(params, makeEvent(result.event, state.sessionId, payload, state.usage, state.rateLimits))
-      return
-    }
-
-    if (message.method === 'item/tool/requestUserInput') {
-      script.send(jsonRpcError(
-        message.id,
-        JSON_RPC_APPLICATION_ERROR,
-        'Symphony does not support interactive user input during Codex turns',
-      ))
-
-      return yield* new CodexError({
-        code: 'turn_input_required',
-        reason: 'Codex requested user input; first-pass Symphony fails rather than stalling',
-        sessionId: state.sessionId ?? undefined,
-      })
-    }
-
-    if (isApprovalRequestMethod(message.method)) {
-      const result = approvalApprovalResult(message.method, payload)
-
-      script.send(result === null
-        ? jsonRpcError(message.id, JSON_RPC_APPLICATION_ERROR, `Symphony does not support approval request: ${message.method}`)
-        : jsonRpcResult(message.id, result))
-      yield* emit(params, makeEvent(result === null ? 'approval_unsupported' : 'approval_granted', state.sessionId, payload, state.usage, state.rateLimits))
-      return
-    }
-
-    script.send(jsonRpcError(
-      message.id,
-      JSON_RPC_METHOD_NOT_FOUND,
-      `Unsupported Codex server request method: ${message.method}`,
-    ))
-
-    return yield* new CodexError({
-      code: 'response_error',
-      reason: `unsupported Codex server request method: ${message.method}`,
-      sessionId: state.sessionId ?? undefined,
-    })
-  })
-}
-
-function handleScriptNotification(
+const runCodexProcessTurn = Effect.fn('runCodexProcessTurn')(function* (
   params: CodexRunParams,
-  state: TurnState,
-  message: JsonRpcNotification,
-): Effect.Effect<CodexRunResult | null, CodexError> {
-  return Effect.gen(function* () {
-    const payload = isRecord(message.params) ? message.params : {}
+): Effect.fn.Return<CodexRunResult, CodexError, LinearTransport> {
+  const linearTransport = yield* LinearTransport
 
-    updateStateFromNotification(state, message)
-    yield* maybeEmitSessionStarted(params, state)
+  return yield* runCodexProcessTurnWithTransport(params, linearTransport)
+})
 
-    if (message.method === 'thread/tokenUsage/updated') {
-      state.usage = extractUsage(payload) ?? state.usage
-    }
+export const CodexAppServerClientLive = Layer.succeed(CodexAppServerClient)({
+  runTurn: Effect.fn('CodexAppServerClient.runTurn')(function* (params: CodexRunParams) {
+    return yield* runCodexProcessTurn(params)
+  }),
+})
 
-    if (message.method === 'account/rateLimits/updated') {
-      state.rateLimits = extractRateLimits(payload)
-    }
-
-    yield* emit(params, makeEvent(message.method, state.sessionId, payload, state.usage, state.rateLimits))
-
-    if (message.method === 'error') {
-      return yield* new CodexError({
-        code: 'response_error',
-        reason: stringValue(payload.message) ?? 'Codex app-server emitted an error notification',
-        sessionId: state.sessionId ?? undefined,
-      })
-    }
-
-    if (message.method !== 'turn/completed') {
-      return null
-    }
-
-    const completion = completionFromTurnPayload(params, state, message.params)
-
-    if (completion instanceof CodexError) {
-      return yield* completion
-    }
-
-    return completion
-  })
-}
-
-function executeDynamicToolCall(
-  params: CodexRunParams,
-  requestParams: unknown,
-): Effect.Effect<DynamicToolExecution, never, LinearTransport> {
-  return Effect.gen(function* () {
-    const payload = isRecord(requestParams) ? requestParams : {}
-    const toolName = stringValue(payload.tool) ?? stringValue(payload.name)
-    const toolInput = 'arguments' in payload
-      ? payload.arguments
-      : 'input' in payload
-        ? payload.input
-        : undefined
-
-    if (toolName === 'linear_graphql') {
-      const result = yield* executeLinearGraphQLTool(params.serviceConfig, toolInput)
-
-      return {
-        event: 'tool_call',
-        response: dynamicToolResponse(result.success, result),
-      }
-    }
-
-    const result = {
-      success: false,
-      error: {
-        code: 'unsupported_tool_call',
-        message: `Unsupported tool: ${toolName ?? 'unknown'}`,
-      },
-    }
-
-    return {
-      event: 'unsupported_tool_call',
-      response: dynamicToolResponse(false, result),
-    }
-  })
+function scriptProtocolSession(script: CodexProtocolScript): CodexProtocolSession {
+  return {
+    processId: null,
+    send: message =>
+      Effect.try({
+        try: () => script.send(message),
+        catch: cause => new CodexError({
+          code: 'response_error',
+          reason: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+      }),
+    nextMessage: Effect.try({
+      try: () => script.nextMessage(),
+      catch: cause => new CodexError({
+        code: 'response_timeout',
+        reason: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }),
+    }),
+  }
 }
 
 function validateWorkspaceCwd(params: CodexRunParams): void {
@@ -780,40 +767,12 @@ function validateWorkspaceCwd(params: CodexRunParams): void {
   }
 }
 
-function validateWorkspaceCwdEffect(params: CodexRunParams): Effect.Effect<void, CodexError> {
-  return Effect.try({
-    try: () => validateWorkspaceCwd(params),
-    catch: cause => cause instanceof CodexError
-      ? cause
-      : new CodexError({
-          code: 'invalid_workspace_cwd',
-          reason: cause instanceof Error ? cause.message : String(cause),
-        }),
-  })
-}
-
-function initializeRequest(id: JsonRpcId): JsonRpcRequest {
-  return {
-    id,
-    method: 'initialize',
-    params: initializeParams(),
-  }
-}
-
 function initializeParams(): Record<string, unknown> {
   return {
     clientInfo: CLIENT_INFO,
     capabilities: {
       experimentalApi: true,
     },
-  }
-}
-
-function threadRequest(id: JsonRpcId, params: CodexRunParams): JsonRpcRequest {
-  return {
-    id,
-    method: threadRequestMethod(params),
-    params: threadRequestParams(params),
   }
 }
 
@@ -829,14 +788,6 @@ function threadRequestParams(params: CodexRunParams): Record<string, unknown> {
     sandbox: params.config.threadSandbox,
     serviceName: 'symphony-ts',
   })
-}
-
-function turnStartRequest(id: JsonRpcId, params: CodexRunParams, threadId: string): JsonRpcRequest {
-  return {
-    id,
-    method: 'turn/start',
-    params: turnStartParams(params, threadId),
-  }
 }
 
 function turnStartParams(params: CodexRunParams, threadId: string): Record<string, unknown> {
@@ -876,17 +827,6 @@ function updateThreadAndTurnFromPayload(state: TurnState, payload: unknown): voi
   state.threadId = extractThreadId(payload) ?? state.threadId
   state.turnId = extractTurnId(payload) ?? state.turnId
   state.sessionId = composeSessionId(state.threadId, state.turnId) ?? state.sessionId
-}
-
-function maybeEmitSessionStarted(params: CodexRunParams, state: TurnState): Effect.Effect<void> {
-  if (!tryMarkSessionStarted(state)) {
-    return Effect.void
-  }
-
-  return emit(params, makeEvent('session_started', state.sessionId, {
-    threadId: state.threadId,
-    turnId: state.turnId,
-  }, state.usage, state.rateLimits))
 }
 
 function tryMarkSessionStarted(state: TurnState): boolean {
@@ -955,18 +895,6 @@ function completionFromTurnPayload(
   })
 }
 
-function failOnJsonRpcError(message: JsonRpcResponse, label: string): Effect.Effect<void, CodexError> {
-  if (message.error === undefined) {
-    return Effect.void
-  }
-
-  return Effect.fail(new CodexError({
-    code: 'response_error',
-    reason: `${label} failed: ${formatJsonRpcError(message.error)}`,
-    cause: message.error,
-  }))
-}
-
 function jsonRpcResult(id: JsonRpcId, result: unknown): JsonRpcResponse {
   return { id, result }
 }
@@ -1025,6 +953,7 @@ function approvalApprovalResult(method: string, payload: Record<string, unknown>
 
 function makeEvent(
   event: string,
+  timestamp: number,
   sessionId: string | null,
   payload: Record<string, unknown>,
   usage: TokenUsage | null,
@@ -1032,17 +961,13 @@ function makeEvent(
 ): CodexRuntimeEvent {
   return {
     event,
-    timestamp: Date.now(),
+    timestamp,
     codexAppServerPid: stringValue(payload.pid),
     sessionId,
     message: stringValue(payload.message),
     usage,
     rateLimits,
   }
-}
-
-function emit(params: CodexRunParams, event: CodexRuntimeEvent): Effect.Effect<void> {
-  return params.onEvent?.(event) ?? Effect.void
 }
 
 function extractThreadId(payload: unknown): string | null {
@@ -1180,10 +1105,10 @@ function omitUndefined(values: Record<string, unknown>): Record<string, unknown>
 
 function stringifyJson(value: unknown): string {
   try {
-    return JSON.stringify(value) ?? 'null'
+    return encodeUnknownJsonString(value)
   }
   catch {
-    return JSON.stringify({
+    return encodeUnknownJsonString({
       success: false,
       error: {
         code: 'non_serializable_tool_result',

@@ -1,4 +1,5 @@
-import { Effect, Layer } from 'effect'
+import * as NodeHttpClient from '@effect/platform-node/NodeHttpClient'
+import { Clock, Effect, Layer } from 'effect'
 import { CodexAppServerClientLive } from './agent-runner/codex.js'
 import { AgentRunnerLive } from './agent-runner/runner.js'
 import { ConfigResolverLive } from './config/resolve.js'
@@ -15,8 +16,11 @@ export function AppLive(workflowPath: string | undefined) {
   const workflowRuntime = WorkflowRuntimeLive(workflowPath).pipe(
     Layer.provide(Layer.mergeAll(WorkflowLoaderLive, ConfigResolverLive)),
   )
+  const linearTransport = LinearTransportLive.pipe(
+    Layer.provide(NodeHttpClient.layerFetch),
+  )
   const trackerClient = LinearTrackerClientLive.pipe(
-    Layer.provide(LinearTransportLive),
+    Layer.provide(linearTransport),
   )
 
   return Layer.mergeAll(
@@ -26,42 +30,47 @@ export function AppLive(workflowPath: string | undefined) {
     OrchestratorStateLive,
     WorkspaceManagerLive,
     PromptRendererLive,
-    LinearTransportLive,
+    linearTransport,
     trackerClient,
     CodexAppServerClientLive,
     AgentRunnerLive,
   )
 }
 
-export function startSymphony() {
-  return Effect.gen(function* () {
-    const workflow = yield* WorkflowRuntime
-    const logger = yield* RuntimeLogger
-    const initialConfig = yield* workflow.getConfig
+export const startSymphony = Effect.fn('startSymphony')(function* () {
+  const workflow = yield* WorkflowRuntime
+  const logger = yield* RuntimeLogger
+  const initialConfig = yield* workflow.getConfig
 
-    yield* logger.info('symphony_starting', {
-      workflow_path: initialConfig.workflowPath,
-      workspace_root: initialConfig.workspace.root,
-    })
-    yield* startupTerminalWorkspaceCleanup(initialConfig)
-    yield* workflow.watch(result =>
-      result.applied
-        ? logger.info('workflow_reload_applied', { workflow_path: result.config.workflowPath })
-        : logger.warn('workflow_reload_rejected', {
-            workflow_path: result.config.workflowPath,
-            reason: result.error,
-          }),
-    ).pipe(Effect.forkChild({ startImmediately: true }))
-
-    while (true) {
-      const config = yield* workflow.getConfig
-      const nowMs = Date.now()
-      yield* pollTick(config, { nowMs }).pipe(
-        Effect.catch(error => logger.error('poll_tick_failed', {
-          reason: 'reason' in error ? error.reason : String(error),
-        })),
-      )
-      yield* Effect.sleep(`${config.polling.intervalMs} millis`)
-    }
+  yield* logger.info('symphony_starting', {
+    workflow_path: initialConfig.workflowPath,
+    workspace_root: initialConfig.workspace.root,
   })
-}
+  yield* startupTerminalWorkspaceCleanup(initialConfig)
+  yield* workflow.watch(result =>
+    result.applied
+      ? logger.info('workflow_reload_applied', { workflow_path: result.config.workflowPath })
+      : logger.warn('workflow_reload_rejected', {
+          workflow_path: result.config.workflowPath,
+          reason: result.error,
+        }),
+  ).pipe(
+    Effect.catch(error => logger.error('workflow_watch_failed', {
+      workflow_path: error.path,
+      error_code: error.code,
+      reason: error.reason,
+    })),
+    Effect.forkChild({ startImmediately: true }),
+  )
+
+  while (true) {
+    const config = yield* workflow.getConfig
+    const nowMs = yield* Clock.currentTimeMillis
+    yield* pollTick(config, { nowMs }).pipe(
+      Effect.catch(error => logger.error('poll_tick_failed', {
+        reason: 'reason' in error ? error.reason : String(error),
+      })),
+    )
+    yield* Effect.sleep(`${config.polling.intervalMs} millis`)
+  }
+})

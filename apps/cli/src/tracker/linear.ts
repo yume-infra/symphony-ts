@@ -1,5 +1,6 @@
 import type { Issue, ServiceConfig } from '../domain/types.js'
 import { Context, Effect, Layer, Schema } from 'effect'
+import { HttpClient, HttpClientRequest } from 'effect/unstable/http'
 import { TrackerError } from '../domain/errors.js'
 import { isPlainRecord } from '../domain/types.js'
 
@@ -27,36 +28,38 @@ export class LinearTransport extends Context.Service<LinearTransport, LinearTran
 
 const encodeGraphQLRequestBody = Schema.encodeUnknownEffect(Schema.UnknownFromJsonString)
 
-export const LinearTransportLive = Layer.succeed(LinearTransport)({
-  execute: request =>
-    Effect.gen(function* () {
+const makeLinearTransport = Effect.fn('LinearTransport.make')(function* () {
+  const httpClient = yield* HttpClient.HttpClient
+
+  return {
+    execute: Effect.fn('LinearTransport.execute')(function* (request: LinearGraphQLRequest) {
       const body = yield* encodeGraphQLRequestBody({
         query: request.query,
         variables: request.variables ?? {},
       }).pipe(
         Effect.mapError(cause => linearRequestError(cause)),
       )
+      const httpRequest = HttpClientRequest.post(request.endpoint).pipe(
+        HttpClientRequest.acceptJson,
+        HttpClientRequest.setHeader('authorization', request.apiKey),
+        HttpClientRequest.bodyText(body, 'application/json'),
+      )
+      const response = yield* httpClient.execute(httpRequest).pipe(
+        Effect.mapError(cause => linearRequestError(cause)),
+      )
+      const responseBody = yield* response.json.pipe(
+        Effect.mapError(cause => linearRequestError(cause)),
+      )
 
-      return yield* Effect.tryPromise({
-        try: async () => {
-          const response = await fetch(request.endpoint, {
-            method: 'POST',
-            headers: {
-              'authorization': request.apiKey,
-              'content-type': 'application/json',
-            },
-            body,
-          })
-
-          return {
-            status: response.status,
-            body: await response.json(),
-          }
-        },
-        catch: cause => linearRequestError(cause),
-      })
+      return {
+        status: response.status,
+        body: responseBody,
+      }
     }),
+  }
 })
+
+export const LinearTransportLive = Layer.effect(LinearTransport)(makeLinearTransport())
 
 export interface TrackerClientShape {
   readonly fetchCandidateIssues: (
@@ -75,23 +78,6 @@ export interface TrackerClientShape {
 export class TrackerClient extends Context.Service<TrackerClient, TrackerClientShape>()(
   'symphony/TrackerClient',
 ) {}
-
-export const LinearTrackerClientLive = Layer.effect(TrackerClient)(
-  Effect.gen(function* () {
-    const transport = yield* LinearTransport
-    const provideTransport = <A>(
-      effect: Effect.Effect<A, TrackerError, LinearTransport>,
-    ): Effect.Effect<A, TrackerError> => effect.pipe(
-      Effect.provideService(LinearTransport, transport),
-    )
-
-    return TrackerClient.of({
-      fetchCandidateIssues: config => provideTransport(fetchCandidateIssues(config)),
-      fetchIssuesByStates: (config, stateNames) => provideTransport(fetchIssuesByStates(config, stateNames)),
-      fetchIssueStatesByIds: (config, issueIds) => provideTransport(fetchIssueStatesByIds(config, issueIds)),
-    })
-  }),
-)
 
 function linearRequestError(cause: unknown): TrackerError {
   return new TrackerError({
@@ -200,86 +186,183 @@ query SymphonyIssueStatesByIds($ids: [ID!]) {
 }
 `
 
-export function fetchCandidateIssues(
-  config: ServiceConfig,
-): Effect.Effect<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
-  if (config.tracker.projectSlug === null || config.tracker.projectSlug === '') {
-    return missingProjectSlug('fetch_candidate_issues')
-  }
-
-  return fetchPagedIssues(config, 'fetch_candidate_issues', CANDIDATE_ISSUES_QUERY, after => ({
-    projectSlug: config.tracker.projectSlug as string,
-    activeStates: config.tracker.activeStates,
-    after,
-  }))
-}
-
-export function fetchIssuesByStates(
-  config: ServiceConfig,
-  stateNames: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
-  if (stateNames.length === 0) {
-    return Effect.succeed([])
-  }
-
-  if (config.tracker.projectSlug === null || config.tracker.projectSlug === '') {
-    return missingProjectSlug('fetch_issues_by_states')
-  }
-
-  return fetchPagedIssues(config, 'fetch_issues_by_states', ISSUES_BY_STATES_QUERY, after => ({
-    projectSlug: config.tracker.projectSlug as string,
-    stateNames,
-    after,
-  }))
-}
-
-export function fetchIssueStatesByIds(
-  config: ServiceConfig,
-  issueIds: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
-  if (issueIds.length === 0) {
-    return Effect.succeed([])
-  }
-
-  return fetchPagedIssues(config, 'fetch_issue_states_by_ids', ISSUE_STATES_BY_IDS_QUERY, after => ({
-    ids: issueIds,
-    after,
-  }))
-}
-
-export function executeLinearGraphQL(
+export const executeLinearGraphQL = Effect.fn('executeLinearGraphQL')(function* (
   config: ServiceConfig,
   operation: string,
   query: string,
   variables: Record<string, unknown> = {},
-): Effect.Effect<LinearGraphQLResponse, TrackerError, LinearTransport> {
-  return Effect.gen(function* () {
-    if (config.tracker.kind !== 'linear') {
-      return yield* new TrackerError({
-        code: 'unsupported_tracker_kind',
-        operation,
-        reason: `unsupported tracker kind: ${config.tracker.kind ?? 'missing'}`,
-      })
-    }
-
-    if (config.tracker.apiKey === null || config.tracker.apiKey === '') {
-      return yield* new TrackerError({
-        code: 'missing_tracker_api_key',
-        operation,
-        reason: 'Linear API key is missing',
-      })
-    }
-
-    const transport = yield* LinearTransport
-
-    return yield* transport.execute({
-      endpoint: config.tracker.endpoint,
-      apiKey: config.tracker.apiKey,
-      query,
-      variables,
+): Effect.fn.Return<LinearGraphQLResponse, TrackerError, LinearTransport> {
+  if (config.tracker.kind !== 'linear') {
+    return yield* new TrackerError({
+      code: 'unsupported_tracker_kind',
+      operation,
+      reason: `unsupported tracker kind: ${config.tracker.kind ?? 'missing'}`,
     })
+  }
+
+  if (config.tracker.apiKey === null || config.tracker.apiKey === '') {
+    return yield* new TrackerError({
+      code: 'missing_tracker_api_key',
+      operation,
+      reason: 'Linear API key is missing',
+    })
+  }
+
+  const transport = yield* LinearTransport
+
+  return yield* transport.execute({
+    endpoint: config.tracker.endpoint,
+    apiKey: config.tracker.apiKey,
+    query,
+    variables,
   })
-}
+})
+
+const requireOkGraphQLResponse = Effect.fn('requireOkGraphQLResponse')((
+  response: LinearGraphQLResponse,
+  operation: string,
+): Effect.Effect<unknown, TrackerError> => {
+  if (response.status !== 200) {
+    return Effect.fail(new TrackerError({
+      code: 'linear_api_status',
+      operation,
+      status: response.status,
+      reason: `Linear GraphQL returned HTTP ${response.status}`,
+    }))
+  }
+
+  if (isPlainRecord(response.body) && Array.isArray(response.body.errors) && response.body.errors.length > 0) {
+    return Effect.fail(new TrackerError({
+      code: 'linear_graphql_errors',
+      operation,
+      reason: 'Linear GraphQL returned top-level errors',
+      cause: response.body.errors,
+    }))
+  }
+
+  return Effect.succeed(response.body)
+})
+
+const issueConnection = Effect.fn('issueConnection')((
+  body: unknown,
+  operation: string,
+): Effect.Effect<{
+  readonly nodes: ReadonlyArray<unknown>
+  readonly hasNextPage: boolean
+  readonly endCursor: string | null
+}, TrackerError> => {
+  const data = isPlainRecord(body) ? body.data : undefined
+  const issues = isPlainRecord(data) ? data.issues : undefined
+  const nodes = isPlainRecord(issues) && Array.isArray(issues.nodes) ? issues.nodes : null
+  const pageInfo = isPlainRecord(issues) && isPlainRecord(issues.pageInfo) ? issues.pageInfo : null
+
+  if (nodes === null || pageInfo === null || typeof pageInfo.hasNextPage !== 'boolean') {
+    return Effect.fail(new TrackerError({
+      code: 'linear_unknown_payload',
+      operation,
+      reason: 'Linear payload did not contain issues.nodes and pageInfo',
+    }))
+  }
+
+  return Effect.succeed({
+    nodes,
+    hasNextPage: pageInfo.hasNextPage,
+    endCursor: nullableString(pageInfo.endCursor),
+  })
+})
+
+const missingProjectSlug = Effect.fn('missingProjectSlug')((operation: string): Effect.Effect<never, TrackerError> =>
+  Effect.fail(new TrackerError({
+    code: 'missing_tracker_project_slug',
+    operation,
+    reason: 'Linear project slug is missing',
+  })))
+
+const fetchPagedIssues = Effect.fn('fetchPagedIssues')(function* (
+  config: ServiceConfig,
+  operation: string,
+  query: string,
+  variablesForPage: (after: string | null) => Record<string, unknown>,
+): Effect.fn.Return<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
+  let after: string | null = null
+  const issues: Array<Issue> = []
+
+  while (true) {
+    const response: LinearGraphQLResponse = yield* executeLinearGraphQL(config, operation, query, variablesForPage(after))
+    const body: unknown = yield* requireOkGraphQLResponse(response, operation)
+    const connection: {
+      readonly nodes: ReadonlyArray<unknown>
+      readonly hasNextPage: boolean
+      readonly endCursor: string | null
+    } = yield* issueConnection(body, operation)
+    const pageIssues: ReadonlyArray<Issue> = connection.nodes
+      .map(normalizeLinearIssue)
+      .filter((issue: Issue | null): issue is Issue => issue !== null)
+
+    issues.push(...pageIssues)
+
+    if (!connection.hasNextPage) {
+      return issues
+    }
+
+    if (connection.endCursor === null) {
+      return yield* new TrackerError({
+        code: 'linear_missing_end_cursor',
+        operation,
+        reason: 'Linear pageInfo.hasNextPage was true but endCursor was missing',
+      })
+    }
+
+    after = connection.endCursor
+  }
+})
+
+export const fetchCandidateIssues = Effect.fn('fetchCandidateIssues')(function* (
+  config: ServiceConfig,
+): Effect.fn.Return<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
+  if (config.tracker.projectSlug === null || config.tracker.projectSlug === '') {
+    return yield* missingProjectSlug('fetch_candidate_issues')
+  }
+
+  return yield* fetchPagedIssues(config, 'fetch_candidate_issues', CANDIDATE_ISSUES_QUERY, after => ({
+    projectSlug: config.tracker.projectSlug as string,
+    activeStates: config.tracker.activeStates,
+    after,
+  }))
+})
+
+export const fetchIssuesByStates = Effect.fn('fetchIssuesByStates')(function* (
+  config: ServiceConfig,
+  stateNames: ReadonlyArray<string>,
+): Effect.fn.Return<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
+  if (stateNames.length === 0) {
+    return []
+  }
+
+  if (config.tracker.projectSlug === null || config.tracker.projectSlug === '') {
+    return yield* missingProjectSlug('fetch_issues_by_states')
+  }
+
+  return yield* fetchPagedIssues(config, 'fetch_issues_by_states', ISSUES_BY_STATES_QUERY, after => ({
+    projectSlug: config.tracker.projectSlug as string,
+    stateNames,
+    after,
+  }))
+})
+
+export const fetchIssueStatesByIds = Effect.fn('fetchIssueStatesByIds')(function* (
+  config: ServiceConfig,
+  issueIds: ReadonlyArray<string>,
+): Effect.fn.Return<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
+  if (issueIds.length === 0) {
+    return []
+  }
+
+  return yield* fetchPagedIssues(config, 'fetch_issue_states_by_ids', ISSUE_STATES_BY_IDS_QUERY, after => ({
+    ids: issueIds,
+    after,
+  }))
+})
 
 export function normalizeLinearIssue(value: unknown): Issue | null {
   if (!isPlainRecord(value)) {
@@ -311,104 +394,22 @@ export function normalizeLinearIssue(value: unknown): Issue | null {
   }
 }
 
-function fetchPagedIssues(
-  config: ServiceConfig,
-  operation: string,
-  query: string,
-  variablesForPage: (after: string | null) => Record<string, unknown>,
-): Effect.Effect<ReadonlyArray<Issue>, TrackerError, LinearTransport> {
-  return Effect.gen(function* () {
-    let after: string | null = null
-    const issues: Array<Issue> = []
+const makeLinearTrackerClient = Effect.fn('LinearTrackerClient.make')(function* () {
+  const transport = yield* LinearTransport
+  const provideTransport = <A>(
+    effect: Effect.Effect<A, TrackerError, LinearTransport>,
+  ): Effect.Effect<A, TrackerError> => effect.pipe(
+    Effect.provideService(LinearTransport, transport),
+  )
 
-    while (true) {
-      const response: LinearGraphQLResponse = yield* executeLinearGraphQL(config, operation, query, variablesForPage(after))
-      const body: unknown = yield* requireOkGraphQLResponse(response, operation)
-      const connection: {
-        readonly nodes: ReadonlyArray<unknown>
-        readonly hasNextPage: boolean
-        readonly endCursor: string | null
-      } = yield* issueConnection(body, operation)
-      const pageIssues: ReadonlyArray<Issue> = connection.nodes
-        .map(normalizeLinearIssue)
-        .filter((issue: Issue | null): issue is Issue => issue !== null)
-
-      issues.push(...pageIssues)
-
-      if (!connection.hasNextPage) {
-        return issues
-      }
-
-      if (connection.endCursor === null) {
-        return yield* new TrackerError({
-          code: 'linear_missing_end_cursor',
-          operation,
-          reason: 'Linear pageInfo.hasNextPage was true but endCursor was missing',
-        })
-      }
-
-      after = connection.endCursor
-    }
+  return TrackerClient.of({
+    fetchCandidateIssues: config => provideTransport(fetchCandidateIssues(config)),
+    fetchIssuesByStates: (config, stateNames) => provideTransport(fetchIssuesByStates(config, stateNames)),
+    fetchIssueStatesByIds: (config, issueIds) => provideTransport(fetchIssueStatesByIds(config, issueIds)),
   })
-}
+})
 
-function requireOkGraphQLResponse(
-  response: LinearGraphQLResponse,
-  operation: string,
-): Effect.Effect<unknown, TrackerError> {
-  if (response.status !== 200) {
-    return Effect.fail(new TrackerError({
-      code: 'linear_api_status',
-      operation,
-      status: response.status,
-      reason: `Linear GraphQL returned HTTP ${response.status}`,
-    }))
-  }
-
-  if (isPlainRecord(response.body) && Array.isArray(response.body.errors) && response.body.errors.length > 0) {
-    return Effect.fail(new TrackerError({
-      code: 'linear_graphql_errors',
-      operation,
-      reason: 'Linear GraphQL returned top-level errors',
-      cause: response.body.errors,
-    }))
-  }
-
-  return Effect.succeed(response.body)
-}
-
-function issueConnection(body: unknown, operation: string): Effect.Effect<{
-  readonly nodes: ReadonlyArray<unknown>
-  readonly hasNextPage: boolean
-  readonly endCursor: string | null
-}, TrackerError> {
-  const data = isPlainRecord(body) ? body.data : undefined
-  const issues = isPlainRecord(data) ? data.issues : undefined
-  const nodes = isPlainRecord(issues) && Array.isArray(issues.nodes) ? issues.nodes : null
-  const pageInfo = isPlainRecord(issues) && isPlainRecord(issues.pageInfo) ? issues.pageInfo : null
-
-  if (nodes === null || pageInfo === null || typeof pageInfo.hasNextPage !== 'boolean') {
-    return Effect.fail(new TrackerError({
-      code: 'linear_unknown_payload',
-      operation,
-      reason: 'Linear payload did not contain issues.nodes and pageInfo',
-    }))
-  }
-
-  return Effect.succeed({
-    nodes,
-    hasNextPage: pageInfo.hasNextPage,
-    endCursor: nullableString(pageInfo.endCursor),
-  })
-}
-
-function missingProjectSlug(operation: string): Effect.Effect<never, TrackerError> {
-  return Effect.fail(new TrackerError({
-    code: 'missing_tracker_project_slug',
-    operation,
-    reason: 'Linear project slug is missing',
-  }))
-}
+export const LinearTrackerClientLive = Layer.effect(TrackerClient)(makeLinearTrackerClient())
 
 function normalizeLabels(value: unknown): ReadonlyArray<string> {
   if (!isPlainRecord(value) || !Array.isArray(value.nodes)) {

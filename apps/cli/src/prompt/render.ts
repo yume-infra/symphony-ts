@@ -1,5 +1,5 @@
 import type { Issue } from '../domain/types.js'
-import { Context, Effect, Layer } from 'effect'
+import { Context, Effect, Layer, Schema } from 'effect'
 import { PromptRenderError } from '../domain/errors.js'
 import { DEFAULT_PROMPT } from '../domain/types.js'
 
@@ -19,15 +19,13 @@ export class PromptRenderer extends Context.Service<PromptRenderer, PromptRender
   'symphony/PromptRenderer',
 ) {}
 
-export const PromptRendererLive = Layer.succeed(PromptRenderer)({
-  render: renderPrompt,
-})
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.UnknownFromJsonString)
 
-export function renderPrompt(
+export const renderPrompt = Effect.fn('renderPrompt')((
   template: string,
   input: PromptInput,
-): Effect.Effect<string, PromptRenderError> {
-  return Effect.try({
+): Effect.Effect<string, PromptRenderError> =>
+  Effect.try({
     try: () => renderTemplate(template.trim() === '' ? DEFAULT_PROMPT : template, {
       issue: issueTemplateValue(input.issue),
       attempt: input.attempt,
@@ -42,8 +40,11 @@ export function renderPrompt(
         reason: cause instanceof Error ? cause.message : String(cause),
       })
     },
-  })
-}
+  }))
+
+export const PromptRendererLive = Layer.succeed(PromptRenderer)({
+  render: Effect.fn('PromptRenderer.render')((template: string, input: PromptInput) => renderPrompt(template, input)),
+})
 
 function renderTemplate(template: string, variables: Record<string, unknown>): string {
   const expandedLoops = template.replace(
@@ -130,7 +131,7 @@ function stringifyValue(value: unknown): string {
     return String(value)
   }
 
-  return JSON.stringify(value)
+  return encodeUnknownJsonString(value)
 }
 
 function unknownExpression(expression: string): PromptRenderError {
