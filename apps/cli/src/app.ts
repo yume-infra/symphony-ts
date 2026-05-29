@@ -4,8 +4,10 @@ import { CodexAppServerClientLive } from './agent-runner/codex.js'
 import { AgentRunnerLive } from './agent-runner/runner.js'
 import { ConfigResolverLive } from './config/resolve.js'
 import { RuntimeLogger, RuntimeLoggerLive } from './observability/logging.js'
+import { AttemptCompletionServiceLive } from './orchestrator/attempt-completion.js'
 import { pollTick, startupTerminalWorkspaceCleanup } from './orchestrator/runtime.js'
 import { OrchestratorStateLive } from './orchestrator/state.js'
+import { WorkerSupervisorLive } from './orchestrator/worker-supervisor.js'
 import { PromptRendererLive } from './prompt/render.js'
 import { RunEvidenceServiceLive } from './run-evidence/service.js'
 import { LinearTrackerClientLive, LinearTransportLive } from './tracker/linear.js'
@@ -30,6 +32,8 @@ export function AppLive(workflowPath: string | undefined) {
     RuntimeLoggerLive,
     RunEvidenceServiceLive,
     OrchestratorStateLive,
+    WorkerSupervisorLive,
+    AttemptCompletionServiceLive,
     WorkspaceManagerLive,
     PromptRendererLive,
     linearTransport,

@@ -1,9 +1,10 @@
 import type { CodexRuntimeEvent } from '../agent-runner/codex.js'
 import type { Issue, ServiceConfig } from '../domain/types.js'
+import type { AttemptOwner } from './attempt-owner.js'
+import type { RuntimeState } from './state.js'
 import { describe, expect, it } from '@effect/vitest'
 import { Effect, Ref } from 'effect'
 import {
-  attachWorkerFiberInState,
   failureRetryDelayMs,
   handleWorkerExitInState,
   initialRuntimeState,
@@ -64,12 +65,13 @@ describe('orchestrator state rules', () => {
     const blocked = issue({
       blockedBy: [{ id: 'b1', identifier: 'SYM-0', state: 'Todo' }],
     })
-    const [marked, state] = tryMarkRunningInState(initialRuntimeState(), issue(), config, 0, null, null)
+    const owner = makeOwner('attempt-current', 1000)
+    const [marked, markedState] = tryMarkRunningInState(initialRuntimeState(), issue(), config, 0, null, '/tmp/SYM-1', owner)
 
     expect(marked).toBe(true)
-    expect(isDispatchEligible(issue(), state, config)).toBe(false)
+    expect(isDispatchEligible(issue(), markedState, config)).toBe(false)
     expect(isDispatchEligible(blocked, initialRuntimeState(), config)).toBe(false)
-    expect(isDispatchEligible(issue({ id: 'issue-2', identifier: 'SYM-2' }), state, {
+    expect(isDispatchEligible(issue({ id: 'issue-2', identifier: 'SYM-2' }), markedState, {
       ...config,
       agent: {
         ...config.agent,
@@ -79,9 +81,10 @@ describe('orchestrator state rules', () => {
   })
 
   it('schedules continuation and capped failure retries on worker exit', () => {
-    const [_, runningState] = tryMarkRunningInState(initialRuntimeState(), issue(), config, 0, 2, '/tmp/SYM-1')
-    const normal = handleWorkerExitInState(runningState, 'issue-1', { _tag: 'normal' }, config, 5000)
-    const failed = handleWorkerExitInState(runningState, 'issue-1', { _tag: 'failed', error: 'boom' }, {
+    const owner = makeOwner('attempt-initial', 0, 2)
+    const [_, runningState] = tryMarkRunningInState(initialRuntimeState(), issue(), config, 0, 2, '/tmp/SYM-1', owner)
+    const normal = handleWorkerExitInState(runningState, owner, { _tag: 'normal' }, config, 5000)
+    const failed = handleWorkerExitInState(runningState, owner, { _tag: 'failed', error: 'boom' }, {
       ...config,
       agent: {
         ...config.agent,
@@ -108,80 +111,183 @@ describe('orchestrator state rules', () => {
     })).toBe(300000)
   })
 
-  it('fences stale worker exits and codex events by attempt id', () => {
-    const [_, firstAttemptState] = tryMarkRunningInState(
-      initialRuntimeState(),
-      issue(),
-      config,
-      0,
-      null,
-      '/tmp/SYM-1',
-      'attempt-old',
-    )
-    const newAttemptState = {
-      ...firstAttemptState,
-      running: new Map(firstAttemptState.running).set('issue-1', {
-        ...firstAttemptState.running.get('issue-1')!,
-        ownership: {
-          attemptId: 'attempt-new',
-          workerFiber: null,
+  it.effect('fences stale worker exits and codex events by owner token', () =>
+    Effect.gen(function* () {
+      const oldOwner = makeOwner('attempt-old', 1000)
+      const currentOwner = makeOwner('attempt-new', 2000)
+      const [_, firstAttemptState] = tryMarkRunningInState(
+        initialRuntimeState(),
+        issue(),
+        config,
+        0,
+        null,
+        '/tmp/SYM-1',
+        oldOwner,
+      )
+      const stateWithCurrentAttempt = {
+        ...firstAttemptState,
+        running: new Map(firstAttemptState.running).set(
+          'issue-1',
+          {
+            ...firstAttemptState.running.get('issue-1')!,
+            attemptId: currentOwner.attemptId,
+            startedAtMs: currentOwner.startedAtMs,
+          },
+        ),
+      }
+      const afterOldExit = handleWorkerExitInState(stateWithCurrentAttempt, oldOwner, {
+        _tag: 'normal',
+      }, config, 5000)
+      const ref = yield* Ref.make<RuntimeState>(stateWithCurrentAttempt as RuntimeState)
+      const state = makeOrchestratorState(ref)
+      yield* state.recordCodexEvent(oldOwner, event({
+        usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
+      }))
+
+      const afterOldEvent = yield* state.get
+
+      yield* state.recordCodexEvent(currentOwner, event({
+        timestamp: 2500,
+        usage: { inputTokens: 13, outputTokens: 8, totalTokens: 21 },
+      }))
+
+      const afterCurrentEvent = yield* state.get
+
+      expect(afterOldExit.running.get('issue-1')?.attemptId).toBe('attempt-new')
+      expect(afterOldExit.retryAttempts.has('issue-1')).toBe(false)
+      expect(afterOldEvent.running.get('issue-1')?.session).toBeNull()
+      expect(afterCurrentEvent.running.get('issue-1')?.session?.codexInputTokens).toBe(13)
+      expect(afterCurrentEvent.running.get('issue-1')?.session?.codexOutputTokens).toBe(8)
+      expect(afterCurrentEvent.running.get('issue-1')?.session?.lastCodexMessage).toBe(null)
+    }))
+
+  it('does not retry terminal worker completion and marks issue completed', () => {
+    const owner = makeOwner('attempt-terminal', 0)
+    const [, runningState] = tryMarkRunningInState(initialRuntimeState(), issue(), config, 0, null, '/tmp/SYM-1', owner)
+    const canceled = handleWorkerExitInState(runningState, owner, {
+      _tag: 'canceled',
+      error: 'issue state Done is terminal',
+      cause: 'terminal',
+    }, config, 5000)
+
+    expect(canceled.running.has('issue-1')).toBe(false)
+    expect(canceled.claimed.has('issue-1')).toBe(false)
+    expect(canceled.completed.has('issue-1')).toBe(true)
+    expect(canceled.retryAttempts.has('issue-1')).toBe(false)
+  })
+
+  it.effect('grants one-shot terminal cleanup authorization for the interrupted owner', () =>
+    Effect.gen(function* () {
+      const ref = yield* Ref.make(initialRuntimeState())
+      const state = makeOrchestratorState(ref)
+      const owner = makeOwner('attempt-terminal-reconcile', 1000)
+      const [, runningState] = tryMarkRunningInState(initialRuntimeState(), issue(), config, 1000, null, '/tmp/SYM-1', owner)
+
+      yield* state.set(runningState)
+      const interruptions = yield* state.reconcileRunning([issue({ state: 'Done' })], config, 5000)
+      const granted = yield* state.getTerminalCleanupAuthorization(owner)
+      const consumed = yield* state.consumeTerminalCleanupAuthorization(owner)
+      const consumedAgain = yield* state.consumeTerminalCleanupAuthorization(owner)
+      const snapshot = yield* state.get
+
+      expect(interruptions).toHaveLength(1)
+      expect(interruptions[0]).toMatchObject({
+        owner: {
+          attemptId: 'attempt-terminal-reconcile',
         },
-      }),
-    }
+        intent: {
+          cause: 'terminal',
+          cleanup: true,
+          issue: {
+            state: 'Done',
+          },
+        },
+      })
+      expect(snapshot.running.has('issue-1')).toBe(false)
+      expect(snapshot.completed.has('issue-1')).toBe(true)
+      expect(granted).toMatchObject({
+        owner: {
+          attemptId: 'attempt-terminal-reconcile',
+        },
+        issue: {
+          state: 'Done',
+        },
+        reason: 'issue state Done is terminal',
+      })
+      expect(consumed).toEqual(granted)
+      expect(consumedAgain).toBeNull()
+    }))
 
-    const afterOldExit = handleWorkerExitInState(
-      newAttemptState,
-      'issue-1',
-      { _tag: 'normal' },
-      config,
-      5000,
-      'attempt-old',
-    )
+  it.effect('revokes stale cleanup authorization when a new owner claims the issue', () =>
+    Effect.gen(function* () {
+      const ref = yield* Ref.make(initialRuntimeState())
+      const state = makeOrchestratorState(ref)
+      const oldOwner = makeOwner('attempt-old-terminal', 1000)
+      const newOwner = makeOwner('attempt-new-active', 6000)
+      const [, runningState] = tryMarkRunningInState(initialRuntimeState(), issue(), config, 1000, null, '/tmp/SYM-1', oldOwner)
 
-    expect(afterOldExit.running.get('issue-1')?.ownership?.attemptId).toBe('attempt-new')
-    expect(afterOldExit.retryAttempts.has('issue-1')).toBe(false)
-  })
+      yield* state.set(runningState)
+      yield* state.reconcileRunning([issue({ state: 'Done' })], config, 5000)
 
-  it('attaches worker fibers only to the current attempt owner', () => {
-    const fakeFiber = { id: 1 } as never
-    const [_, runningState] = tryMarkRunningInState(
-      initialRuntimeState(),
-      issue(),
-      config,
-      0,
-      null,
-      '/tmp/SYM-1',
-      'attempt-current',
-    )
+      expect(yield* state.getTerminalCleanupAuthorization(oldOwner)).not.toBeNull()
 
-    const [staleAttached, afterStaleAttach] = attachWorkerFiberInState(
-      runningState,
-      'issue-1',
-      'attempt-stale',
-      fakeFiber,
-    )
-    const [currentAttached, afterCurrentAttach] = attachWorkerFiberInState(
-      afterStaleAttach,
-      'issue-1',
-      'attempt-current',
-      fakeFiber,
-    )
+      const marked = yield* state.tryMarkRunning(issue(), config, 6000, 1, '/tmp/SYM-1', newOwner)
 
-    expect(staleAttached).toBe(false)
-    expect(currentAttached).toBe(true)
-    expect(afterCurrentAttach.running.get('issue-1')?.ownership?.workerFiber).toBe(fakeFiber)
-  })
+      expect(marked).toBe(true)
+      expect(yield* state.getTerminalCleanupAuthorization(oldOwner)).toBeNull()
+      expect(yield* state.consumeTerminalCleanupAuthorization(oldOwner)).toBeNull()
+    }))
+
+  it.effect('fences due retry consumption by token and keeps replaced retries intact', () =>
+    Effect.gen(function* () {
+      const ref = yield* Ref.make(initialRuntimeState())
+      const state = makeOrchestratorState(ref)
+
+      yield* state.scheduleRetry(issue(), 1, 'first failure', 0, 1000)
+      const firstToken = (yield* state.get).retryAttempts.get('issue-1')?.retryToken
+
+      expect(firstToken).toBeDefined()
+      expect(yield* state.consumeDueRetry('issue-1', 'retry-token-mismatch', 1000)).toBeNull()
+
+      yield* state.scheduleRetry(issue(), 2, 'replaced failure', 0, 1001)
+      const replacedToken = (yield* state.get).retryAttempts.get('issue-1')?.retryToken
+
+      expect(replacedToken).toBeDefined()
+      expect(replacedToken).not.toBe(firstToken)
+      expect(yield* state.consumeDueRetry('issue-1', firstToken!, 1001)).toBeNull()
+
+      const consumed = yield* state.consumeDueRetry('issue-1', replacedToken!, 1001)
+
+      expect(consumed).toEqual({
+        issueId: 'issue-1',
+        attempt: 2,
+        retryToken: replacedToken,
+      })
+      expect((yield* state.get).retryAttempts.has('issue-1')).toBe(false)
+      expect((yield* state.get).claimed.has('issue-1')).toBe(false)
+    }))
 
   it.effect('aggregates token deltas and exposes live runtime in snapshots', () =>
     Effect.gen(function* () {
       const ref = yield* Ref.make(initialRuntimeState())
       const state = makeOrchestratorState(ref)
-      yield* state.set(tryMarkRunningInState(initialRuntimeState(), issue(), config, 1000, null, null)[1])
+      const owner = makeOwner('attempt-running', 1000)
+      const [, runningState] = tryMarkRunningInState(
+        initialRuntimeState(),
+        issue(),
+        config,
+        1000,
+        null,
+        '/tmp/SYM-1',
+        owner,
+      )
 
-      yield* state.recordCodexEvent('issue-1', event({
+      yield* state.set(runningState)
+      yield* state.recordCodexEvent(owner, event({
         usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       }))
-      yield* state.recordCodexEvent('issue-1', event({
+      yield* state.recordCodexEvent(owner, event({
+        timestamp: 2200,
         usage: { inputTokens: 13, outputTokens: 8, totalTokens: 21 },
         rateLimits: { remaining: 1 },
       }))
@@ -195,6 +301,9 @@ describe('orchestrator state rules', () => {
         secondsRunning: 2,
       })
       expect(snapshot.rateLimits).toEqual({ remaining: 1 })
+      expect('attemptId' in (snapshot.running[0] as object)).toBe(false)
+      expect('owner' in (snapshot.running[0] as object)).toBe(false)
+      expect('fiber' in (snapshot.running[0] as object)).toBe(false)
     }))
 })
 
@@ -237,4 +346,15 @@ function event(overrides: Partial<CodexRuntimeEvent> = {}): CodexRuntimeEvent {
     ...base,
     ...overrides,
   } as CodexRuntimeEvent
+}
+
+function makeOwner(attemptId: string, startedAtMs: number, attempt: number | null = null): AttemptOwner {
+  return {
+    issueId: 'issue-1',
+    issueIdentifier: 'SYM-1',
+    attempt,
+    attemptId,
+    workspacePath: '/tmp/SYM-1',
+    startedAtMs,
+  }
 }

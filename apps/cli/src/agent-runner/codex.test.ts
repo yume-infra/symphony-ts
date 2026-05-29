@@ -1,13 +1,19 @@
 import type { Issue, ServiceConfig } from '../domain/types.js'
-import type { LinearGraphQLRequest, LinearGraphQLResponse } from '../tracker/linear.js'
+import type { LinearGraphQLRequest, LinearGraphQLResponse, LinearTransportShape } from '../tracker/linear.js'
 import type { CodexRunParams, CodexRuntimeEvent } from './codex.js'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { describe, expect, it } from '@effect/vitest'
-import { Effect, Layer, Schema } from 'effect'
+import { Deferred, Effect, Fiber, Layer, Schema, Sink, Stream } from 'effect'
+import { ChildProcessSpawner } from 'effect/unstable/process'
 import { createFakeCodexAppServerScript } from '../../tests/support/fakes/codex-app-server.js'
 import { withFakeWorkspace } from '../../tests/support/fakes/workspace.js'
 import { LinearTransport } from '../tracker/linear.js'
-import { CodexAppServerClient, CodexAppServerClientLive, runCodexScriptTurn } from './codex.js'
+import {
+  CodexAppServerClient,
+  CodexAppServerClientLive,
+  runCodexProcessTurnWithTransportForTests,
+  runCodexScriptTurn,
+} from './codex.js'
 
 const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)
 
@@ -266,6 +272,34 @@ describe('codex app-server boundary', () => {
       expect(error).toMatchObject({
         code: 'invalid_workspace_cwd',
       })
+    }))
+
+  it.effect('terminates spawned app-server session resources when the turn is interrupted', () =>
+    Effect.gen(function* () {
+      const counters = {
+        spawnCount: 0,
+        killCount: 0,
+      }
+      const spawned = yield* Deferred.make<void>()
+      const linearTransport: LinearTransportShape = {
+        execute: () => Effect.die(new Error('linear transport should not be called')),
+      }
+      const fakeSpawner = fakeChildProcessSpawner({
+        counters,
+        spawned,
+      })
+      const run = yield* runCodexProcessTurnWithTransportForTests({
+        ...baseParams,
+        command: 'bash -lc "sleep 60"',
+      }, linearTransport, {
+        childProcessSpawner: fakeSpawner,
+      }).pipe(Effect.forkChild)
+
+      yield* Deferred.await(spawned)
+      yield* Fiber.interrupt(run)
+
+      expect(counters.spawnCount).toBe(1)
+      expect(counters.killCount).toBe(1)
     }))
 
   it.effect('fails user-input server requests instead of stalling', () =>
@@ -601,6 +635,53 @@ function fakeLinear(responses: ReadonlyArray<LinearGraphQLResponse>): {
         }),
     }),
   }
+}
+
+interface FakeCodexProcessSpawnerParams {
+  readonly counters: {
+    spawnCount: number
+    killCount: number
+  }
+  readonly spawned: Deferred.Deferred<void>
+}
+
+function fakeChildProcessSpawner({
+  counters,
+  spawned,
+}: FakeCodexProcessSpawnerParams): ChildProcessSpawner.ChildProcessSpawner['Service'] {
+  const spawn = Effect.fnUntraced(function* () {
+    counters.spawnCount += 1
+    const exitCodeDeferred = yield* Deferred.make<ChildProcessSpawner.ExitCode>()
+    const handle = ChildProcessSpawner.makeHandle({
+      pid: ChildProcessSpawner.ProcessId(12345),
+      exitCode: Deferred.await(exitCodeDeferred),
+      isRunning: Effect.succeed(true),
+      kill: () => Effect.gen(function* () {
+        const completed = yield* Deferred.succeed(exitCodeDeferred, ChildProcessSpawner.ExitCode(143))
+
+        if (completed) {
+          counters.killCount += 1
+        }
+      }),
+      stdin: Sink.drain,
+      stdout: Stream.empty,
+      stderr: Stream.empty,
+      all: Stream.empty,
+      getInputFd: () => Sink.drain,
+      getOutputFd: () => Stream.empty,
+      unref: Effect.succeed(Effect.void),
+    })
+
+    const scopedHandle = yield* Effect.acquireRelease(
+      Effect.succeed(handle),
+      spawnedHandle => spawnedHandle.kill().pipe(Effect.catch(error => Effect.die(error))),
+    )
+    yield* Deferred.succeed(spawned, void 0)
+
+    return scopedHandle
+  })
+
+  return ChildProcessSpawner.make(spawn)
 }
 
 function fakeAppServerSource(): string {

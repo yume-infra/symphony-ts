@@ -140,6 +140,17 @@ const HookOutcomeSchema = Schema.Struct({
   reason: Schema.String,
 })
 
+const CleanupHoldSchema = Schema.Struct({
+  version: Schema.Literal('cleanup-hold.v1'),
+  issueId: Schema.String,
+  issueIdentifier: Schema.String,
+  attempt: Schema.Number,
+  reason: Schema.String,
+  createdAtMs: Schema.Number,
+  createdAtIso: Schema.String,
+  workspacePath: Schema.String,
+})
+
 const RunSummarySchema = Schema.Struct({
   schemaVersion: Schema.Literal('run-summary.v1'),
   issue: Schema.Struct({
@@ -179,6 +190,7 @@ export type ErrorInfo = Schema.Schema.Type<typeof ErrorInfoSchema>
 export type RunExitSummary = Schema.Schema.Type<typeof RunExitSummarySchema>
 export type RawSessionReference = Schema.Schema.Type<typeof RawSessionReferenceSchema>
 export type CleanupSummary = Schema.Schema.Type<typeof CleanupSummarySchema>
+export type CleanupHold = Schema.Schema.Type<typeof CleanupHoldSchema>
 export type RunEvidenceEvent = Schema.Schema.Type<typeof RunEvidenceEventSchema>
 export type ToolCallSummary = Schema.Schema.Type<typeof ToolCallSummarySchema>
 export type FileChangeSummary = Schema.Schema.Type<typeof FileChangeSummarySchema>
@@ -187,8 +199,11 @@ export type RunSummary = Schema.Schema.Type<typeof RunSummarySchema>
 
 const RunSummaryJsonStringSchema = Schema.fromJsonString(RunSummarySchema)
 const RunEvidenceEventJsonStringSchema = Schema.fromJsonString(RunEvidenceEventSchema)
+const CleanupHoldJsonStringSchema = Schema.fromJsonString(CleanupHoldSchema)
 
 export const encodeRunSummaryJson = Schema.encodeUnknownEffect(RunSummaryJsonStringSchema)
 export const decodeRunSummaryJson = Schema.decodeUnknownEffect(RunSummaryJsonStringSchema)
 export const encodeRunEvidenceEventJson = Schema.encodeUnknownEffect(RunEvidenceEventJsonStringSchema)
 export const decodeRunEvidenceEventJson = Schema.decodeUnknownEffect(RunEvidenceEventJsonStringSchema)
+export const encodeCleanupHoldJson = Schema.encodeUnknownEffect(CleanupHoldJsonStringSchema)
+export const decodeCleanupHoldJson = Schema.decodeUnknownEffect(CleanupHoldJsonStringSchema)

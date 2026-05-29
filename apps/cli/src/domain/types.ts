@@ -109,6 +109,7 @@ export interface RetryEntry {
   readonly identifier: string
   readonly attempt: number
   readonly dueAtMs: number
+  readonly retryToken: string
   readonly error: string | null
 }
 

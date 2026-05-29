@@ -1,4 +1,3 @@
-import type { Fiber as RuntimeFiber } from 'effect/Fiber'
 import type { CodexRuntimeEvent } from '../agent-runner/codex.js'
 import type {
   CodexTotals,
@@ -9,16 +8,18 @@ import type {
   RunningIssue,
   ServiceConfig,
 } from '../domain/types.js'
+import type { AttemptOwner, WorkerInterruptionIntent } from './attempt-owner.js'
 import { Context, Effect, Layer, Ref } from 'effect'
 import { normalizeStateName } from '../domain/types.js'
+import { ownerKey, workerOwnersMatch } from './attempt-owner.js'
 
-interface WorkerOwnership {
-  readonly attemptId: string
-  readonly workerFiber: RuntimeFiber<unknown, unknown> | null
+interface WorkerExitCancellationCause {
+  readonly terminal: true
+  readonly not_active: true
 }
 
 export interface RuntimeRunningIssue extends RunningIssue {
-  readonly ownership?: WorkerOwnership | null
+  readonly attemptId: string
 }
 
 export interface RuntimeState {
@@ -26,15 +27,32 @@ export interface RuntimeState {
   readonly claimed: ReadonlySet<string>
   readonly retryAttempts: ReadonlyMap<string, RetryEntry>
   readonly completed: ReadonlySet<string>
+  readonly terminalCleanupAuthorizations: ReadonlyMap<string, TerminalCleanupAuthorization>
   readonly codexTotals: CodexTotals
   readonly rateLimits: unknown
 }
 
 export type WorkerExitReason
-  = | { readonly _tag: 'normal' }
+  = { readonly _tag: 'normal' }
     | { readonly _tag: 'failed', readonly error: string }
-    | { readonly _tag: 'stalled', readonly error: string }
-    | { readonly _tag: 'canceled', readonly error: string }
+    | {
+      readonly _tag: 'canceled'
+      readonly error: string
+      readonly cause: keyof WorkerExitCancellationCause | 'stalled' | 'manual'
+      readonly grantCleanup?: boolean
+    }
+
+export interface TerminalCleanupAuthorization {
+  readonly owner: AttemptOwner
+  readonly issue: Issue
+  readonly reason: string
+  readonly grantedAtMs: number
+}
+
+export interface WorkerInterruptionCommand {
+  readonly owner: AttemptOwner
+  readonly intent: WorkerInterruptionIntent
+}
 
 export interface OrchestratorStateShape {
   readonly get: Effect.Effect<RuntimeState>
@@ -46,21 +64,23 @@ export interface OrchestratorStateShape {
     nowMs: number,
     attempt: number | null,
     workspacePath: string | null,
-    attemptId?: string | null,
+    owner: AttemptOwner,
   ) => Effect.Effect<boolean>
-  readonly attachWorkerFiber: (
-    issueId: string,
-    attemptId: string,
-    workerFiber: RuntimeFiber<unknown, unknown>,
-  ) => Effect.Effect<boolean>
-  readonly recordCodexEvent: (issueId: string, event: CodexRuntimeEvent, attemptId?: string) => Effect.Effect<void>
+  readonly isCurrentOwner: (owner: AttemptOwner) => Effect.Effect<boolean>
+  readonly recordCodexEvent: (owner: AttemptOwner, event: CodexRuntimeEvent) => Effect.Effect<void>
   readonly handleWorkerExit: (
-    issueId: string,
+    owner: AttemptOwner,
     reason: WorkerExitReason,
     config: ServiceConfig,
     nowMs: number,
-    attemptId?: string,
   ) => Effect.Effect<void>
+  readonly reconcileRunning: (
+    refreshed: ReadonlyArray<Issue>,
+    config: ServiceConfig,
+    nowMs: number,
+  ) => Effect.Effect<ReadonlyArray<WorkerInterruptionCommand>>
+  readonly getTerminalCleanupAuthorization: (owner: AttemptOwner) => Effect.Effect<TerminalCleanupAuthorization | null>
+  readonly consumeTerminalCleanupAuthorization: (owner: AttemptOwner) => Effect.Effect<TerminalCleanupAuthorization | null>
   readonly scheduleRetry: (
     issue: Pick<Issue, 'id' | 'identifier'>,
     attempt: number,
@@ -68,6 +88,11 @@ export interface OrchestratorStateShape {
     delayMs: number,
     nowMs: number,
   ) => Effect.Effect<void>
+  readonly consumeDueRetry: (
+    issueId: string,
+    retryToken: string,
+    nowMs: number,
+  ) => Effect.Effect<Pick<RetryEntry, 'issueId' | 'attempt' | 'retryToken'> | null>
   readonly releaseClaim: (issueId: string) => Effect.Effect<void>
 }
 
@@ -81,12 +106,15 @@ export const OrchestratorStateLive = Layer.effect(OrchestratorState)(
   ),
 )
 
+let nextRetryToken = 0
+
 export function initialRuntimeState(): RuntimeState {
   return {
     running: new Map(),
     claimed: new Set(),
     retryAttempts: new Map(),
     completed: new Set(),
+    terminalCleanupAuthorizations: new Map(),
     codexTotals: {
       inputTokens: 0,
       outputTokens: 0,
@@ -105,16 +133,28 @@ export function makeOrchestratorState(ref: Ref.Ref<RuntimeState>): OrchestratorS
       Ref.get(ref).pipe(
         Effect.map(state => snapshotFromState(state, config, nowMs)),
       ),
-    tryMarkRunning: (issue, config, nowMs, attempt, workspacePath, attemptId = null) =>
-      Ref.modify(ref, state => tryMarkRunningInState(state, issue, config, nowMs, attempt, workspacePath, attemptId)),
-    attachWorkerFiber: (issueId, attemptId, workerFiber) =>
-      Ref.modify(ref, state => attachWorkerFiberInState(state, issueId, attemptId, workerFiber)),
-    recordCodexEvent: (issueId, event, attemptId) =>
-      Ref.update(ref, state => recordCodexEventInState(state, issueId, event, attemptId)),
-    handleWorkerExit: (issueId, reason, config, nowMs, attemptId) =>
-      Ref.update(ref, state => handleWorkerExitInState(state, issueId, reason, config, nowMs, attemptId)),
+    tryMarkRunning: (issue, config, nowMs, attempt, workspacePath, owner) =>
+      Ref.modify(ref, state => tryMarkRunningInState(state, issue, config, nowMs, attempt, workspacePath, owner)),
+    isCurrentOwner: owner =>
+      Ref.get(ref).pipe(
+        Effect.map(state => isCurrentStateOwner(state, owner)),
+      ),
+    recordCodexEvent: (owner, event) =>
+      Ref.update(ref, state => recordCodexEventInState(state, owner, event)),
+    handleWorkerExit: (owner, reason, config, nowMs) =>
+      Ref.update(ref, state => handleWorkerExitInState(state, owner, reason, config, nowMs)),
+    reconcileRunning: (refreshed, config, nowMs) =>
+      Ref.modify(ref, state => reconcileRunningInState(state, refreshed, config, nowMs)),
+    getTerminalCleanupAuthorization: owner =>
+      Ref.get(ref).pipe(
+        Effect.map(state => terminalCleanupAuthorizationInState(state, owner)),
+      ),
+    consumeTerminalCleanupAuthorization: owner =>
+      Ref.modify(ref, state => consumeTerminalCleanupAuthorizationInState(state, owner)),
     scheduleRetry: (issue, attempt, error, delayMs, nowMs) =>
       Ref.update(ref, state => scheduleRetryInState(state, issue, attempt, error, delayMs, nowMs)),
+    consumeDueRetry: (issueId, retryToken, nowMs) =>
+      Ref.modify(ref, state => consumeDueRetryInState(state, issueId, retryToken, nowMs)),
     releaseClaim: issueId =>
       Ref.update(ref, state => ({
         ...state,
@@ -181,7 +221,7 @@ function continuationRetryDelayMs(): number {
 }
 
 export function failureRetryDelayMs(attempt: number, config: ServiceConfig): number {
-  return Math.min(10000 * 2 ** Math.max(attempt - 1, 0), config.agent.maxRetryBackoffMs)
+  return Math.min(10_000 * 2 ** Math.max(attempt - 1, 0), config.agent.maxRetryBackoffMs)
 }
 
 function snapshotFromState(
@@ -212,7 +252,7 @@ export function tryMarkRunningInState(
   nowMs: number,
   attempt: number | null,
   workspacePath: string | null,
-  attemptId: string | null = null,
+  owner: AttemptOwner,
 ): [boolean, RuntimeState] {
   if (!isDispatchEligible(issue, state, config)) {
     return [false, state]
@@ -226,43 +266,15 @@ export function tryMarkRunningInState(
       startedAtMs: nowMs,
       workspacePath,
       session: null,
-      ownership: attemptId === null
-        ? null
-        : {
-            attemptId,
-            workerFiber: null,
-          },
+      attemptId: owner.attemptId,
     }),
     claimed: new Set(state.claimed).add(issue.id),
     retryAttempts: withoutMapValue(state.retryAttempts, issue.id),
+    terminalCleanupAuthorizations: withoutCleanupAuthorizationForIssue(state.terminalCleanupAuthorizations, issue.id),
   }]
 }
 
-export function attachWorkerFiberInState(
-  state: RuntimeState,
-  issueId: string,
-  attemptId: string,
-  workerFiber: RuntimeFiber<unknown, unknown>,
-): [boolean, RuntimeState] {
-  const running = state.running.get(issueId)
-
-  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
-    return [false, state]
-  }
-
-  return [true, {
-    ...state,
-    running: new Map(state.running).set(issueId, {
-      ...running,
-      ownership: {
-        attemptId,
-        workerFiber,
-      },
-    }),
-  }]
-}
-
-function scheduleRetryInState(
+export function scheduleRetryInState(
   state: RuntimeState,
   issue: Pick<Issue, 'id' | 'identifier'>,
   attempt: number,
@@ -270,6 +282,8 @@ function scheduleRetryInState(
   delayMs: number,
   nowMs: number,
 ): RuntimeState {
+  const retryToken = makeRetryToken(issue.id, attempt, nowMs)
+
   return {
     ...state,
     claimed: new Set(state.claimed).add(issue.id),
@@ -278,28 +292,61 @@ function scheduleRetryInState(
       identifier: issue.identifier,
       attempt,
       dueAtMs: nowMs + delayMs,
+      retryToken,
       error,
     }),
   }
 }
 
-export function handleWorkerExitInState(
+function makeRetryToken(issueId: string, attempt: number, nowMs: number): string {
+  nextRetryToken += 1
+
+  return `${issueId}:${attempt}:${nowMs}:${nextRetryToken}`
+}
+
+function consumeDueRetryInState(
   state: RuntimeState,
   issueId: string,
+  retryToken: string,
+  nowMs: number,
+): [Pick<RetryEntry, 'issueId' | 'attempt' | 'retryToken'> | null, RuntimeState] {
+  const retry = state.retryAttempts.get(issueId)
+
+  if (retry === undefined || retry.retryToken !== retryToken || retry.dueAtMs > nowMs) {
+    return [null, state]
+  }
+
+  return [
+    {
+      issueId: retry.issueId,
+      attempt: retry.attempt,
+      retryToken: retry.retryToken,
+    },
+    {
+      ...state,
+      retryAttempts: withoutMapValue(state.retryAttempts, issueId),
+      claimed: withoutSetValue(state.claimed, issueId),
+    },
+  ]
+}
+
+export function handleWorkerExitInState(
+  state: RuntimeState,
+  owner: AttemptOwner,
   reason: WorkerExitReason,
   config: ServiceConfig,
   nowMs: number,
-  attemptId?: string,
 ): RuntimeState {
-  const running = state.running.get(issueId)
+  const running = state.running.get(owner.issueId)
 
-  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
+  if (running === undefined || !runningAttemptMatches(running, owner)) {
     return state
   }
 
   const baseState: RuntimeState = {
     ...state,
-    running: withoutMapValue(state.running, issueId),
+    running: withoutMapValue(state.running, owner.issueId),
+    claimed: withoutSetValue(state.claimed, owner.issueId),
     codexTotals: {
       ...state.codexTotals,
       secondsRunning: state.codexTotals.secondsRunning + Math.max(nowMs - running.startedAtMs, 0) / 1000,
@@ -310,7 +357,7 @@ export function handleWorkerExitInState(
     return scheduleRetryInState(
       {
         ...baseState,
-        completed: new Set(baseState.completed).add(issueId),
+        completed: new Set(baseState.completed).add(owner.issueId),
       },
       running.issue,
       1,
@@ -318,6 +365,31 @@ export function handleWorkerExitInState(
       continuationRetryDelayMs(),
       nowMs,
     )
+  }
+
+  if (reason._tag === 'canceled' && reason.cause === 'terminal') {
+    const terminalState = {
+      ...baseState,
+      completed: new Set(baseState.completed).add(owner.issueId),
+    }
+
+    if (reason.grantCleanup !== true) {
+      return terminalState
+    }
+
+    return {
+      ...terminalState,
+      terminalCleanupAuthorizations: new Map(terminalState.terminalCleanupAuthorizations).set(ownerKey(owner), {
+        owner,
+        issue: running.issue,
+        reason: reason.error,
+        grantedAtMs: nowMs,
+      }),
+    }
+  }
+
+  if (reason._tag === 'canceled' && reason.cause === 'not_active') {
+    return baseState
   }
 
   const nextAttempt = (running.attempt ?? 0) + 1
@@ -332,15 +404,211 @@ export function handleWorkerExitInState(
   )
 }
 
+export function removeRunningForReconciliation(
+  state: RuntimeState,
+  owner: AttemptOwner,
+  addCompleted: boolean,
+): RuntimeState {
+  const running = state.running.get(owner.issueId)
+
+  if (running === undefined || !runningAttemptMatches(running, owner)) {
+    return state
+  }
+
+  return {
+    ...state,
+    running: withoutMapValue(state.running, owner.issueId),
+    claimed: withoutSetValue(state.claimed, owner.issueId),
+    completed: addCompleted ? new Set(state.completed).add(owner.issueId) : state.completed,
+  }
+}
+
+function reconcileRunningInState(
+  state: RuntimeState,
+  refreshed: ReadonlyArray<Issue>,
+  config: ServiceConfig,
+  nowMs: number,
+): [ReadonlyArray<WorkerInterruptionCommand>, RuntimeState] {
+  const refreshResult = reconcileRefreshedRunningIssuesInState(state, refreshed, config, nowMs)
+  const staleResult = reconcileStalledRunsInState(refreshResult.state, config, nowMs)
+
+  return [[...refreshResult.interruptions, ...staleResult.interruptions], staleResult.state]
+}
+
+function reconcileRefreshedRunningIssuesInState(
+  state: RuntimeState,
+  refreshed: ReadonlyArray<Issue>,
+  config: ServiceConfig,
+  nowMs: number,
+): { readonly state: RuntimeState, readonly interruptions: ReadonlyArray<WorkerInterruptionCommand> } {
+  let nextState = state
+  const interruptions: Array<WorkerInterruptionCommand> = []
+
+  for (const issue of refreshed) {
+    const running = nextState.running.get(issue.id)
+
+    if (running === undefined) {
+      continue
+    }
+
+    const owner = ownerFromRunning(running)
+
+    if (isTerminalIssue(issue, config)) {
+      const reason = `issue state ${issue.state} is terminal`
+      nextState = {
+        ...nextState,
+        running: new Map(nextState.running).set(issue.id, {
+          ...running,
+          issue,
+        }),
+      }
+      nextState = handleWorkerExitInState(
+        nextState,
+        owner,
+        {
+          _tag: 'canceled',
+          error: reason,
+          cause: 'terminal',
+          grantCleanup: true,
+        },
+        config,
+        nowMs,
+      )
+      interruptions.push(makeInterruption(running, 'terminal', true, reason, issue))
+      continue
+    }
+
+    if (!isActiveIssue(issue, config)) {
+      const reason = `issue state ${issue.state} is no longer active`
+      nextState = handleWorkerExitInState(
+        nextState,
+        owner,
+        {
+          _tag: 'canceled',
+          error: reason,
+          cause: 'not_active',
+        },
+        config,
+        nowMs,
+      )
+      interruptions.push(makeInterruption(running, 'not_active', false, reason, issue))
+      continue
+    }
+
+    nextState = {
+      ...nextState,
+      running: new Map(nextState.running).set(issue.id, {
+        ...running,
+        issue,
+      }),
+    }
+  }
+
+  return { state: nextState, interruptions }
+}
+
+function reconcileStalledRunsInState(
+  state: RuntimeState,
+  config: ServiceConfig,
+  nowMs: number,
+): { readonly state: RuntimeState, readonly interruptions: ReadonlyArray<WorkerInterruptionCommand> } {
+  if (config.codex.stallTimeoutMs <= 0) {
+    return { state, interruptions: [] }
+  }
+
+  let nextState = state
+  const interruptions: Array<WorkerInterruptionCommand> = []
+
+  for (const running of state.running.values()) {
+    const lastActivity = running.session?.lastCodexTimestamp ?? running.startedAtMs
+
+    if (nowMs - lastActivity <= config.codex.stallTimeoutMs) {
+      continue
+    }
+
+    const nextAttempt = (running.attempt ?? 0) + 1
+    const reason = `worker stalled after ${nowMs - lastActivity}ms without codex activity`
+    nextState = removeRunningForReconciliation(nextState, ownerFromRunning(running), false)
+    nextState = scheduleRetryInState(
+      nextState,
+      running.issue,
+      nextAttempt,
+      'worker stalled',
+      failureRetryDelayMs(nextAttempt, config),
+      nowMs,
+    )
+    interruptions.push(makeInterruption(running, 'stalled', false, reason))
+  }
+
+  return { state: nextState, interruptions }
+}
+
+function makeInterruption(
+  running: RuntimeRunningIssue,
+  cause: WorkerInterruptionIntent['cause'],
+  cleanup: boolean,
+  reason: string,
+  issue?: Issue,
+): WorkerInterruptionCommand {
+  return {
+    owner: ownerFromRunning(running),
+    intent: {
+      cause,
+      cleanup,
+      reason,
+      issue,
+    },
+  }
+}
+
+function ownerFromRunning(running: RuntimeRunningIssue): AttemptOwner {
+  return {
+    issueId: running.issue.id,
+    issueIdentifier: running.issue.identifier,
+    attempt: running.attempt,
+    attemptId: running.attemptId,
+    workspacePath: running.workspacePath ?? '',
+    startedAtMs: running.startedAtMs,
+  }
+}
+
+function terminalCleanupAuthorizationInState(
+  state: RuntimeState,
+  owner: AttemptOwner,
+): TerminalCleanupAuthorization | null {
+  const authorization = state.terminalCleanupAuthorizations.get(ownerKey(owner))
+
+  if (authorization === undefined || !workerOwnersMatch(authorization.owner, owner)) {
+    return null
+  }
+
+  return authorization
+}
+
+function consumeTerminalCleanupAuthorizationInState(
+  state: RuntimeState,
+  owner: AttemptOwner,
+): [TerminalCleanupAuthorization | null, RuntimeState] {
+  const authorization = terminalCleanupAuthorizationInState(state, owner)
+
+  if (authorization === null) {
+    return [null, state]
+  }
+
+  return [authorization, {
+    ...state,
+    terminalCleanupAuthorizations: withoutMapValue(state.terminalCleanupAuthorizations, ownerKey(owner)),
+  }]
+}
+
 function recordCodexEventInState(
   state: RuntimeState,
-  issueId: string,
+  owner: AttemptOwner,
   event: CodexRuntimeEvent,
-  attemptId?: string,
 ): RuntimeState {
-  const running = state.running.get(issueId)
+  const running = state.running.get(owner.issueId)
 
-  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
+  if (running === undefined || !runningAttemptMatches(running, owner)) {
     return state
   }
 
@@ -350,7 +618,7 @@ function recordCodexEventInState(
 
   return {
     ...state,
-    running: new Map(state.running).set(issueId, {
+    running: new Map(state.running).set(owner.issueId, {
       ...running,
       session,
     }),
@@ -361,26 +629,6 @@ function recordCodexEventInState(
       secondsRunning: state.codexTotals.secondsRunning,
     },
     rateLimits: event.rateLimits ?? state.rateLimits,
-  }
-}
-
-export function removeRunningForReconciliation(
-  state: RuntimeState,
-  issueId: string,
-  addCompleted: boolean,
-  attemptId?: string,
-): RuntimeState {
-  const running = state.running.get(issueId)
-
-  if (running === undefined || !runningAttemptMatches(running, attemptId)) {
-    return state
-  }
-
-  return {
-    ...state,
-    running: withoutMapValue(state.running, issueId),
-    claimed: withoutSetValue(state.claimed, issueId),
-    completed: addCompleted ? new Set(state.completed).add(issueId) : state.completed,
   }
 }
 
@@ -425,6 +673,24 @@ function tokenDeltaFromEvent(previous: LiveSession | null, event: CodexRuntimeEv
   }
 }
 
+function isCurrentStateOwner(state: RuntimeState, owner: AttemptOwner): boolean {
+  const running = state.running.get(owner.issueId)
+
+  return running !== undefined && runningAttemptMatches(running, owner)
+}
+
+function isActiveIssue(issue: Issue, config: ServiceConfig): boolean {
+  const normalized = normalizeStateName(issue.state)
+
+  return config.tracker.activeStates.some(state => normalizeStateName(state) === normalized)
+}
+
+function isTerminalIssue(issue: Issue, config: ServiceConfig): boolean {
+  const normalized = normalizeStateName(issue.state)
+
+  return config.tracker.terminalStates.some(state => normalizeStateName(state) === normalized)
+}
+
 function availableGlobalSlots(state: RuntimeState, config: ServiceConfig): number {
   return Math.max(config.agent.maxConcurrentAgents - state.running.size, 0)
 }
@@ -445,8 +711,8 @@ function isTerminalState(state: string, config: ServiceConfig): boolean {
   return config.tracker.terminalStates.some(terminalState => normalizeStateName(terminalState) === normalized)
 }
 
-function runningAttemptMatches(running: RuntimeRunningIssue, attemptId: string | undefined): boolean {
-  return attemptId === undefined || running.ownership?.attemptId === attemptId
+function runningAttemptMatches(running: RuntimeRunningIssue, owner: AttemptOwner): boolean {
+  return workerOwnersMatch(ownerFromRunning(running), owner)
 }
 
 function toPublicRunningIssue(running: RuntimeRunningIssue): RunningIssue {
@@ -477,6 +743,21 @@ function withoutMapValue<K, V>(map: ReadonlyMap<K, V>, key: K): Map<K, V> {
 function withoutSetValue<T>(set: ReadonlySet<T>, value: T): Set<T> {
   const next = new Set(set)
   next.delete(value)
+
+  return next
+}
+
+function withoutCleanupAuthorizationForIssue(
+  authorizations: ReadonlyMap<string, TerminalCleanupAuthorization>,
+  issueId: string,
+): Map<string, TerminalCleanupAuthorization> {
+  const next = new Map(authorizations)
+
+  for (const [key, authorization] of next) {
+    if (authorization.owner.issueId === issueId) {
+      next.delete(key)
+    }
+  }
 
   return next
 }

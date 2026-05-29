@@ -1,102 +1,91 @@
-import type { Fiber as RuntimeFiber } from 'effect/Fiber'
-import type { CodexAppServerClient, CodexRuntimeEvent } from '../agent-runner/codex.js'
+import type { CodexRuntimeEvent } from '../agent-runner/codex.js'
 import type { AgentRunResult } from '../agent-runner/runner.js'
-import type { CodexError, ConfigError, PromptRenderError, TrackerError, WorkspaceError } from '../domain/errors.js'
 import type { Issue, ServiceConfig } from '../domain/types.js'
-import type { PromptRenderer } from '../prompt/render.js'
-import type { CleanupSummary } from '../run-evidence/schema.js'
-import type { RunEvidenceService } from '../run-evidence/service.js'
-import type { LinearTransport } from '../tracker/linear.js'
 import type { WorkspaceBestEffortFailure } from '../workspace/manager.js'
-import type { RuntimeRunningIssue, RuntimeState, WorkerExitReason } from './state.js'
-import { Cause, Clock, Effect, Exit, Fiber, Option } from 'effect'
+import type { AttemptCompletionInput, WorkerRunError } from './attempt-completion.js'
+import type { AttemptOwner, WorkerInterruptionIntent } from './attempt-owner.js'
+import type { RuntimeRunningIssue, RuntimeState, WorkerInterruptionCommand } from './state.js'
+import type { WorkerExitObserved } from './worker-supervisor.js'
+import * as NodeServices from '@effect/platform-node/NodeServices'
+import { Cause, Clock, Effect, Exit, Option } from 'effect'
 import { AgentRunner } from '../agent-runner/runner.js'
 import { ConfigResolver } from '../config/resolve.js'
-import { normalizeStateName } from '../domain/types.js'
 import { RuntimeLogger } from '../observability/logging.js'
-import { RunEvidenceService as RunEvidenceServiceTag } from '../run-evidence/service.js'
+import { readCleanupHold } from '../run-evidence/cleanup-hold.js'
 import { TrackerClient } from '../tracker/linear.js'
 import { WorkspaceManager, workspacePathFor } from '../workspace/manager.js'
-import { failureRetryDelayMs, isDispatchEligible, OrchestratorState, removeRunningForReconciliation, sortCandidates } from './state.js'
-
-type WorkerRunError = CodexError | PromptRenderError | TrackerError | WorkspaceError
-
-interface WorkerInterruption {
-  readonly issueId: string
-  readonly issueIdentifier: string
-  readonly attemptId: string | null
-  readonly workerFiber: RuntimeFiber<unknown, unknown> | null
-  readonly reason: 'stalled' | 'not_active'
-  readonly error: string
-}
+import { AttemptCompletionService } from './attempt-completion.js'
+import { failureRetryDelayMs, isDispatchEligible, OrchestratorState, removeRunningForReconciliation, scheduleRetryInState, sortCandidates } from './state.js'
+import { WorkerSupervisor } from './worker-supervisor.js'
 
 interface RunningReconciliationResult {
   readonly state: RuntimeState
-  readonly interruptions: ReadonlyArray<WorkerInterruption>
+  readonly interruptions: ReadonlyArray<WorkerInterruptionCommand>
 }
 
 let nextWorkerAttemptSequence = 0
-
-const interruptWorkerAttempts = Effect.fn('interruptWorkerAttempts')(function* (
-  interruptions: ReadonlyArray<WorkerInterruption>,
-): Effect.fn.Return<void, never, RuntimeLogger> {
-  const logger = yield* RuntimeLogger
-
-  for (const interruption of interruptions) {
-    if (interruption.workerFiber === null) {
-      yield* logger.warn('worker_interrupt_unavailable', {
-        issue_id: interruption.issueId,
-        issue_identifier: interruption.issueIdentifier,
-        attempt_id: interruption.attemptId ?? undefined,
-        reason: interruption.error,
-      })
-      continue
-    }
-
-    yield* logger.warn('worker_interrupt_requested', {
-      issue_id: interruption.issueId,
-      issue_identifier: interruption.issueIdentifier,
-      attempt_id: interruption.attemptId ?? undefined,
-      reason: interruption.error,
-    })
-    yield* Fiber.interrupt(interruption.workerFiber).pipe(
-      Effect.catchCause(cause =>
-        logger.warn('worker_interrupt_failed', {
-          issue_id: interruption.issueId,
-          issue_identifier: interruption.issueIdentifier,
-          attempt_id: interruption.attemptId ?? undefined,
-          reason: Cause.pretty(cause),
-        }),
-      ),
-    )
-  }
-})
 
 export interface PollTickOptions {
   readonly nowMs: number
   readonly launchMode?: 'inline' | 'fork'
 }
 
-export type PollTickError
-  = | ConfigError
-    | TrackerError
-    | WorkspaceError
-    | PromptRenderError
-    | CodexError
+function makeWorkerAttemptId(issue: Issue, attempt: number | null, nowMs: number): string {
+  nextWorkerAttemptSequence += 1
+
+  return `${issue.id}:${attempt ?? 'initial'}:${nowMs}:${nextWorkerAttemptSequence}`
+}
+
+function ownerFromRunning(running: RuntimeRunningIssue): AttemptOwner {
+  return {
+    issueId: running.issue.id,
+    issueIdentifier: running.issue.identifier,
+    attempt: running.attempt,
+    attemptId: running.attemptId,
+    workspacePath: running.workspacePath ?? '',
+    startedAtMs: running.startedAtMs,
+  }
+}
+
+function makeInterruption(running: RuntimeRunningIssue, cause: WorkerInterruptionIntent['cause'], cleanup: boolean, reason: string, issue?: Issue): WorkerInterruptionCommand {
+  return {
+    owner: ownerFromRunning(running),
+    intent: {
+      cause,
+      cleanup,
+      reason,
+      issue,
+    },
+  }
+}
+
+const interruptWorkerAttempts = Effect.fn('interruptWorkerAttempts')(function* (
+  interruptions: ReadonlyArray<WorkerInterruptionCommand>,
+): Effect.fn.Return<void, never, WorkerSupervisor | RuntimeLogger> {
+  const supervisor = yield* WorkerSupervisor
+  const logger = yield* RuntimeLogger
+
+  for (const interruption of interruptions) {
+    yield* logger.warn('worker_interrupt_requested', {
+      issue_id: interruption.owner.issueId,
+      issue_identifier: interruption.owner.issueIdentifier,
+      attempt_id: interruption.owner.attemptId,
+      interruption_reason: interruption.intent.cause,
+      reason: interruption.intent.reason,
+    })
+
+    yield* supervisor.interrupt(interruption.owner, interruption.intent)
+  }
+})
 
 export const reconcileRunning = Effect.fn('reconcileRunning')(function* (
   config: ServiceConfig,
   nowMs: number,
-): Effect.fn.Return<void, TrackerError, OrchestratorState | TrackerClient | LinearTransport | RuntimeLogger> {
+) {
   const stateService = yield* OrchestratorState
   const tracker = yield* TrackerClient
   const logger = yield* RuntimeLogger
-  const stalledReconciliation = reconcileStalledRunsWithInterrupts(yield* stateService.get, config, nowMs)
-  yield* stateService.set(stalledReconciliation.state)
-  yield* interruptWorkerAttempts(stalledReconciliation.interruptions)
-
-  const stateAfterStalls = yield* stateService.get
-  const runningIds = [...stateAfterStalls.running.keys()]
+  const runningIds = [...(yield* stateService.get).running.keys()]
 
   if (runningIds.length === 0) {
     return
@@ -115,120 +104,124 @@ export const reconcileRunning = Effect.fn('reconcileRunning')(function* (
     ),
   )
 
-  if (refreshed.length === 0) {
-    return
-  }
-
-  const refreshedReconciliation = reconcileRefreshedRunningIssues(yield* stateService.get, refreshed, config)
-  yield* stateService.set(refreshedReconciliation.state)
-  yield* interruptWorkerAttempts(refreshedReconciliation.interruptions)
+  const interruptions = yield* stateService.reconcileRunning(refreshed, config, nowMs)
+  yield* interruptWorkerAttempts(interruptions)
 })
 
-const handleWorkerExitEffect = Effect.fn('handleWorkerExitEffect')(function* (
-  issue: Issue,
-  reason: WorkerExitReason,
-  config: ServiceConfig,
-  nowMs: number,
-  attemptId?: string,
-): Effect.fn.Return<void, never, OrchestratorState> {
-  const state = yield* OrchestratorState
+function finalizeAttempt(owner: AttemptOwner, issue: Issue, config: ServiceConfig, codexEvents: ReadonlyArray<CodexRuntimeEvent>, workspaceFailures: ReadonlyArray<WorkspaceBestEffortFailure>, schedulerNowMs: number) {
+  return (exit: Exit.Exit<AgentRunResult, WorkerRunError>, interruptionIntent: WorkerInterruptionIntent | null) =>
+    Effect.gen(function* () {
+      const completion = yield* AttemptCompletionService
+      const logger = yield* RuntimeLogger
+      const state = yield* OrchestratorState
+      const completedAtMs = yield* Clock.currentTimeMillis
 
-  yield* state.handleWorkerExit(issue.id, reason, config, nowMs, attemptId)
-})
+      const input: AttemptCompletionInput = {
+        owner,
+        issue,
+        workerExit: exit,
+        interruptionIntent,
+        codexEvents,
+        workspaceFailures,
+        config,
+        schedulerNowMs,
+        completedAtMs,
+        isCurrentOwner: () => state.isCurrentOwner(owner),
+        consumeCleanupAuthorization: () => state.consumeTerminalCleanupAuthorization(owner),
+        applyTransition: (transition) => {
+          switch (transition._tag) {
+            case 'terminal_completed':
+              return state.handleWorkerExit(transition.owner, {
+                _tag: 'canceled',
+                error: 'worker transitioned to terminal state',
+                cause: 'terminal',
+              }, config, schedulerNowMs)
+            case 'non_active_completed':
+              return state.handleWorkerExit(transition.owner, {
+                _tag: 'canceled',
+                error: 'worker transitioned to non-active state',
+                cause: 'not_active',
+              }, config, schedulerNowMs)
+            case 'normal_completed':
+              return state.handleWorkerExit(transition.owner, {
+                _tag: 'normal',
+              }, config, schedulerNowMs)
+            case 'retry':
+              return state.scheduleRetry(
+                issue,
+                transition.nextAttempt,
+                transition.error,
+                transition.delayMs,
+                schedulerNowMs,
+              )
+            case 'none':
+            default:
+              return Effect.void
+          }
+        },
+      }
 
-const handleWorkerSuccessEffect = Effect.fn('handleWorkerSuccessEffect')(function* (
-  result: AgentRunResult,
-  config: ServiceConfig,
-  nowMs: number,
-  cleanupEnabled: boolean,
-  attemptId?: string,
-): Effect.fn.Return<void, never, OrchestratorState | WorkspaceManager | RuntimeLogger> {
-  if (isTerminal(result.issue, config)) {
-    const state = yield* OrchestratorState
-    const workspace = yield* WorkspaceManager
-    const logger = yield* RuntimeLogger
-    const current = yield* state.get
-    const next = removeRunningForReconciliation(current, result.issue.id, true, attemptId)
+      const result = yield* completion.completeAttempt(input)
 
-    if (next === current) {
-      return
-    }
+      if (result.evidence.written) {
+        if (result.evidence.directory !== null) {
+          yield* logger.info('run_evidence_written', {
+            issue_id: issue.id,
+            issue_identifier: issue.identifier,
+            evidence_path: result.evidence.directory,
+          })
+        }
+      }
+      else {
+        yield* logger.warn('run_evidence_write_failed', {
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          error_code: firstEvidenceErrorCode(result.evidence.exit),
+          reason: describeEvidenceFailure(result.evidence.exit),
+        })
+      }
 
-    yield* state.set(next)
-
-    if (!cleanupEnabled) {
-      yield* logger.warn('workspace_cleanup_skipped', {
-        issue_id: result.issue.id,
-        issue_identifier: result.issue.identifier,
-        workspace_path: result.workspace.path,
-        reason: 'run evidence was not written',
-      })
-      return
-    }
-
-    yield* workspace.removeForIssueBestEffort(
-      result.issue.identifier,
-      config.workspace,
-      config.hooks,
-      failure => logger.warn('workspace_cleanup_failed', workspaceBestEffortFailureContext(result.issue, failure)),
-    )
-    return
-  }
-
-  if (!isActive(result.issue, config)) {
-    const state = yield* OrchestratorState
-    const current = yield* state.get
-    const next = removeRunningForReconciliation(current, result.issue.id, false, attemptId)
-
-    if (next !== current) {
-      yield* state.set(next)
-    }
-
-    return
-  }
-
-  yield* handleWorkerExitEffect(result.issue, { _tag: 'normal' }, config, nowMs, attemptId)
-})
+      if (result.cleanup === 'cleanup_hold_written') {
+        yield* logger.warn('workspace_cleanup_skipped', {
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          workspace_path: owner.workspacePath,
+          reason: 'run evidence was not written',
+        })
+      }
+    })
+}
 
 const dispatchIssue = Effect.fn('dispatchIssue')(function* (
   issue: Issue,
   attempt: number | null,
   config: ServiceConfig,
   options: PollTickOptions,
-): Effect.fn.Return<
-  void,
-  PollTickError,
-  | OrchestratorState
-  | AgentRunner
-  | WorkspaceManager
-  | PromptRenderer
-  | CodexAppServerClient
-  | TrackerClient
-  | LinearTransport
-  | RuntimeLogger
-  | RunEvidenceService
-> {
+) {
   const state = yield* OrchestratorState
   const runner = yield* AgentRunner
   const logger = yield* RuntimeLogger
-  const evidence = yield* RunEvidenceServiceTag
+  const supervisor = yield* WorkerSupervisor
   const workspacePath = workspacePathFor(config.workspace.root, issue.identifier)
   const attemptId = makeWorkerAttemptId(issue, attempt, options.nowMs)
-  const marked = yield* state.tryMarkRunning(
-    issue,
-    config,
-    options.nowMs,
+  const owner: AttemptOwner = {
+    issueId: issue.id,
+    issueIdentifier: issue.identifier,
     attempt,
-    workspacePath,
     attemptId,
-  )
+    workspacePath,
+    startedAtMs: options.nowMs,
+  }
+
+  const marked = yield* state.tryMarkRunning(issue, config, options.nowMs, attempt, workspacePath, owner)
 
   if (!marked) {
-    return
+    return false
   }
 
   const codexEvents: Array<CodexRuntimeEvent> = []
   const workspaceFailures: Array<WorkspaceBestEffortFailure> = []
+
   const worker = runner.runAttempt({
     issue,
     attempt,
@@ -237,7 +230,7 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
       Effect.sync(() => {
         codexEvents.push(event)
       }).pipe(
-        Effect.andThen(state.recordCodexEvent(issue.id, event, attemptId)),
+        Effect.andThen(state.recordCodexEvent(owner, event)),
         Effect.andThen(logger.info('codex_event', {
           issue_id: issue.id,
           issue_identifier: issue.identifier,
@@ -257,117 +250,31 @@ const dispatchIssue = Effect.fn('dispatchIssue')(function* (
         Effect.andThen(logger.warn('workspace_after_run_failed', workspaceBestEffortFailureContext(issue, failure))),
       ),
   })
-  const finalizeWorkerExit = (workerExit: Exit.Exit<AgentRunResult, WorkerRunError>) => Effect.gen(function* () {
-    const completedAtMs = yield* Clock.currentTimeMillis
-    const evidenceIssue = Exit.isSuccess(workerExit) ? workerExit.value.issue : issue
-    const evidenceWorkspacePath = Exit.isSuccess(workerExit) ? workerExit.value.workspace.path : workspacePath
-    const cleanup = cleanupPlan(workerExit, config)
-    const evidenceExit = yield* Effect.exit(evidence.writeAttempt({
-      issue: evidenceIssue,
-      attempt,
-      config,
-      workspacePath: evidenceWorkspacePath,
-      startedAtMs: options.nowMs,
-      completedAtMs,
-      workerExit,
-      codexEvents,
-      workspaceFailures,
-      cleanup,
-    }))
-    const evidenceWritten = Exit.isSuccess(evidenceExit)
-
-    if (evidenceWritten) {
-      yield* logger.info('run_evidence_written', {
-        issue_id: evidenceIssue.id,
-        issue_identifier: evidenceIssue.identifier,
-        evidence_path: evidenceExit.value.directory,
-      })
-    }
-    else {
-      yield* logger.warn('run_evidence_write_failed', {
-        issue_id: evidenceIssue.id,
-        issue_identifier: evidenceIssue.identifier,
-        error_code: firstEvidenceErrorCode(evidenceExit),
-        reason: describeEvidenceFailure(evidenceExit),
-      })
-    }
-
-    if (Exit.isSuccess(workerExit)) {
-      yield* handleWorkerSuccessEffect(workerExit.value, config, options.nowMs, evidenceWritten, attemptId)
-      return
-    }
-
-    if (Cause.hasInterruptsOnly(workerExit.cause)) {
-      yield* logger.warn('worker_interrupted', {
-        issue_id: issue.id,
-        issue_identifier: issue.identifier,
-        attempt_id: attemptId,
-        reason: describeWorkerExit(workerExit),
-      })
-      yield* handleWorkerExitEffect(
-        issue,
-        { _tag: 'canceled', error: describeWorkerExit(workerExit) },
-        config,
-        options.nowMs,
-        attemptId,
-      )
-      return
-    }
-
-    const typedError = firstWorkerTypedError(workerExit)
-
-    yield* logger.warn('worker_failed', typedError === null
-      ? workerExitFailureContext(issue, workerExit)
-      : workerFailureContext(issue, typedError))
-    yield* handleWorkerExitEffect(
-      issue,
-      { _tag: 'failed', error: describeWorkerExit(workerExit) },
-      config,
-      options.nowMs,
-      attemptId,
-    )
-  })
 
   if (options.launchMode === 'inline') {
-    const workerExit = yield* Effect.exit(worker)
-    yield* finalizeWorkerExit(workerExit)
-    return
+    const exit = yield* Effect.exit(worker)
+    yield* finalizeAttempt(owner, issue, config, codexEvents, workspaceFailures, options.nowMs)(exit, null)
+    return true
   }
 
-  const workerFiber = yield* Effect.forkChild(worker, { startImmediately: true })
-  const attached = yield* state.attachWorkerFiber(issue.id, attemptId, workerFiber)
+  const onExit = (output: WorkerExitObserved<AgentRunResult, WorkerRunError>) =>
+    finalizeAttempt(owner, issue, config, codexEvents, workspaceFailures, options.nowMs)(
+      output.exit,
+      output.interruptionIntent,
+    )
 
-  if (!attached) {
-    yield* Fiber.interrupt(workerFiber)
-    return
-  }
-
-  yield* Effect.forkChild(Effect.gen(function* () {
-    const workerExit = yield* Fiber.await(workerFiber)
-    yield* finalizeWorkerExit(workerExit)
-  }), { startImmediately: true })
+  yield* supervisor.start({ owner, worker, onExit })
+  return true
 })
 
 const processDueRetries = Effect.fn('processDueRetries')(function* (
   config: ServiceConfig,
   options: PollTickOptions,
-): Effect.fn.Return<
-  void,
-  PollTickError,
-  | OrchestratorState
-  | TrackerClient
-  | AgentRunner
-  | WorkspaceManager
-  | PromptRenderer
-  | CodexAppServerClient
-  | LinearTransport
-  | RuntimeLogger
-  | RunEvidenceService
-> {
+) {
   const state = yield* OrchestratorState
   const tracker = yield* TrackerClient
-  const snapshot = yield* state.get
-  const dueRetries = [...snapshot.retryAttempts.values()].filter(retry => retry.dueAtMs <= options.nowMs)
+
+  const dueRetries = [...(yield* state.get).retryAttempts.values()].filter(retry => retry.dueAtMs <= options.nowMs)
 
   if (dueRetries.length === 0) {
     return
@@ -376,51 +283,49 @@ const processDueRetries = Effect.fn('processDueRetries')(function* (
   const candidates = yield* tracker.fetchCandidateIssues(config)
 
   for (const retry of dueRetries) {
-    const issue = candidates.find(candidate => candidate.id === retry.issueId)
+    const consumedRetry = yield* state.consumeDueRetry(retry.issueId, retry.retryToken, options.nowMs)
+
+    if (consumedRetry === null) {
+      continue
+    }
+
+    const issue = candidates.find(candidate => candidate.id === consumedRetry.issueId)
 
     if (issue === undefined) {
-      yield* state.releaseClaim(retry.issueId)
       continue
     }
 
     const current = yield* state.get
 
-    if (!isDispatchEligible(issue, {
-      ...current,
-      claimed: new Set([...current.claimed].filter(id => id !== retry.issueId)),
-    }, config)) {
+    if (!isDispatchEligible(issue, current, config)) {
       yield* state.scheduleRetry(
         issue,
-        retry.attempt + 1,
+        consumedRetry.attempt + 1,
         'no available orchestrator slots',
-        failureRetryDelayMs(retry.attempt + 1, config),
+        failureRetryDelayMs(consumedRetry.attempt + 1, config),
         options.nowMs,
       )
       continue
     }
 
-    yield* state.releaseClaim(retry.issueId)
-    yield* dispatchIssue(issue, retry.attempt, config, options)
+    const dispatched = yield* dispatchIssue(issue, consumedRetry.attempt, config, options)
+
+    if (!dispatched) {
+      yield* state.scheduleRetry(
+        issue,
+        consumedRetry.attempt,
+        'retry dispatch lost ownership before start',
+        failureRetryDelayMs(consumedRetry.attempt, config),
+        options.nowMs,
+      )
+    }
   }
 })
 
 export const pollTick = Effect.fn('pollTick')(function* (
   config: ServiceConfig,
   options: PollTickOptions,
-): Effect.fn.Return<
-  void,
-  PollTickError,
-  | ConfigResolver
-  | OrchestratorState
-  | TrackerClient
-  | AgentRunner
-  | WorkspaceManager
-  | PromptRenderer
-  | CodexAppServerClient
-  | LinearTransport
-  | RuntimeLogger
-  | RunEvidenceService
-> {
+) {
   const resolver = yield* ConfigResolver
   const tracker = yield* TrackerClient
   const state = yield* OrchestratorState
@@ -444,7 +349,7 @@ export const pollTick = Effect.fn('pollTick')(function* (
 
 export const startupTerminalWorkspaceCleanup = Effect.fn('startupTerminalWorkspaceCleanup')(function* (
   config: ServiceConfig,
-): Effect.fn.Return<void, never, TrackerClient | WorkspaceManager | LinearTransport | RuntimeLogger> {
+): Effect.fn.Return<void, never, TrackerClient | WorkspaceManager | RuntimeLogger> {
   const tracker = yield* TrackerClient
   const workspace = yield* WorkspaceManager
   const logger = yield* RuntimeLogger
@@ -462,6 +367,34 @@ export const startupTerminalWorkspaceCleanup = Effect.fn('startupTerminalWorkspa
   )
 
   for (const issue of terminalIssues) {
+    const workspacePath = workspacePathFor(config.workspace.root, issue.identifier)
+    const cleanupHold = yield* readCleanupHold(workspacePath).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map(hold => hold === null
+        ? { present: false as const, reason: null }
+        : { present: true as const, reason: hold.reason }),
+      Effect.catch(error =>
+        logger.warn('cleanup_hold_read_failed', {
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          workspace_path: workspacePath,
+          error_code: error.code,
+          reason: error.reason,
+        }).pipe(
+          Effect.as({ present: true as const, reason: 'cleanup hold marker could not be read' }),
+        )),
+    )
+
+    if (cleanupHold.present) {
+      yield* logger.warn('workspace_cleanup_skipped', {
+        issue_id: issue.id,
+        issue_identifier: issue.identifier,
+        workspace_path: workspacePath,
+        reason: cleanupHold.reason ?? 'cleanup hold marker exists',
+      })
+      continue
+    }
+
     yield* workspace.removeForIssueBestEffort(
       issue.identifier,
       config.workspace,
@@ -489,125 +422,30 @@ function reconcileStalledRunsWithInterrupts(
   }
 
   let nextState = state
-  const interruptions: Array<WorkerInterruption> = []
+  const interruptions: Array<WorkerInterruptionCommand> = []
 
   for (const running of state.running.values()) {
     const lastActivity = running.session?.lastCodexTimestamp ?? running.startedAtMs
 
-    if (nowMs - lastActivity > config.codex.stallTimeoutMs) {
-      const nextAttempt = (running.attempt ?? 0) + 1
-      interruptions.push(workerInterruption(
-        running,
-        'stalled',
-        `worker stalled after ${nowMs - lastActivity}ms without codex activity`,
-      ))
-      nextState = removeRunningForReconciliation(nextState, running.issue.id, false, running.ownership?.attemptId)
-      nextState = {
-        ...nextState,
-        retryAttempts: new Map(nextState.retryAttempts).set(running.issue.id, {
-          issueId: running.issue.id,
-          identifier: running.issue.identifier,
-          attempt: nextAttempt,
-          dueAtMs: nowMs + failureRetryDelayMs(nextAttempt, config),
-          error: 'worker stalled',
-        }),
-        claimed: new Set(nextState.claimed).add(running.issue.id),
-      }
+    if (nowMs - lastActivity <= config.codex.stallTimeoutMs) {
+      continue
     }
+
+    const nextAttempt = (running.attempt ?? 0) + 1
+    const reason = `worker stalled after ${nowMs - lastActivity}ms without codex activity`
+    nextState = removeRunningForReconciliation(nextState, ownerFromRunning(running), false)
+    nextState = scheduleRetryInState(
+      nextState,
+      running.issue,
+      nextAttempt,
+      'worker stalled',
+      failureRetryDelayMs(nextAttempt, config),
+      nowMs,
+    )
+    interruptions.push(makeInterruption(running, 'stalled', false, reason))
   }
 
   return { state: nextState, interruptions }
-}
-
-function reconcileRefreshedRunningIssues(
-  state: RuntimeState,
-  refreshed: ReadonlyArray<Issue>,
-  config: ServiceConfig,
-): RunningReconciliationResult {
-  let nextState = state
-  const interruptions: Array<WorkerInterruption> = []
-
-  for (const issue of refreshed) {
-    const running = nextState.running.get(issue.id)
-
-    if (running === undefined) {
-      continue
-    }
-
-    if (isTerminal(issue, config)) {
-      nextState = {
-        ...nextState,
-        running: new Map(nextState.running).set(issue.id, {
-          ...running,
-          issue,
-        }),
-      }
-      continue
-    }
-
-    if (!isActive(issue, config)) {
-      interruptions.push(workerInterruption(
-        running,
-        'not_active',
-        `issue state ${issue.state} is no longer active`,
-      ))
-      nextState = removeRunningForReconciliation(nextState, issue.id, false, running.ownership?.attemptId)
-      continue
-    }
-
-    nextState = {
-      ...nextState,
-      running: new Map(nextState.running).set(issue.id, {
-        ...running,
-        issue,
-      }),
-    }
-  }
-
-  return { state: nextState, interruptions }
-}
-
-function isActive(issue: Issue, config: ServiceConfig): boolean {
-  const normalized = normalizeStateName(issue.state)
-
-  return config.tracker.activeStates.some(state => normalizeStateName(state) === normalized)
-}
-
-function isTerminal(issue: Issue, config: ServiceConfig): boolean {
-  const normalized = normalizeStateName(issue.state)
-
-  return config.tracker.terminalStates.some(state => normalizeStateName(state) === normalized)
-}
-
-function workerInterruption(
-  running: RuntimeRunningIssue,
-  reason: WorkerInterruption['reason'],
-  error: string,
-): WorkerInterruption {
-  return {
-    issueId: running.issue.id,
-    issueIdentifier: running.issue.identifier,
-    attemptId: running.ownership?.attemptId ?? null,
-    workerFiber: running.ownership?.workerFiber ?? null,
-    reason,
-    error,
-  }
-}
-
-function makeWorkerAttemptId(issue: Issue, attempt: number | null, nowMs: number): string {
-  nextWorkerAttemptSequence += 1
-
-  return `${issue.id}:${attempt ?? 'initial'}:${nowMs}:${nextWorkerAttemptSequence}`
-}
-
-function workerFailureContext(issue: Issue, error: WorkerRunError) {
-  return {
-    issue_id: issue.id,
-    issue_identifier: issue.identifier,
-    error_code: error.code,
-    reason: error.reason,
-    session_id: 'sessionId' in error ? error.sessionId : undefined,
-  }
 }
 
 function workspaceBestEffortFailureContext(issue: Issue, failure: WorkspaceBestEffortFailure) {
@@ -620,63 +458,6 @@ function workspaceBestEffortFailureContext(issue: Issue, failure: WorkspaceBestE
     error_code: failure.error.code,
     hook: failure.error.hook,
     reason: failure.error.reason,
-  }
-}
-
-function cleanupPlan(
-  workerExit: Exit.Exit<AgentRunResult, WorkerRunError>,
-  config: ServiceConfig,
-): CleanupSummary {
-  if (!Exit.isSuccess(workerExit)) {
-    return {
-      outcome: 'skipped',
-      reason: 'worker did not complete successfully',
-    }
-  }
-
-  if (isTerminal(workerExit.value.issue, config)) {
-    return {
-      outcome: 'planned',
-      reason: 'terminal issue cleanup runs after evidence write',
-    }
-  }
-
-  return {
-    outcome: 'not_attempted',
-    reason: 'issue is not terminal',
-  }
-}
-
-function firstWorkerTypedError(exit: Exit.Exit<AgentRunResult, WorkerRunError>): WorkerRunError | null {
-  if (Exit.isSuccess(exit)) {
-    return null
-  }
-
-  const error = Cause.findErrorOption(exit.cause)
-
-  return Option.isSome(error) ? error.value : null
-}
-
-function describeWorkerExit(exit: Exit.Exit<AgentRunResult, WorkerRunError>): string {
-  if (Exit.isSuccess(exit)) {
-    return 'worker completed successfully'
-  }
-
-  const typedError = firstWorkerTypedError(exit)
-
-  if (typedError !== null) {
-    return describeWorkerError(typedError)
-  }
-
-  return Cause.pretty(exit.cause)
-}
-
-function workerExitFailureContext(issue: Issue, exit: Exit.Exit<AgentRunResult, WorkerRunError>) {
-  return {
-    issue_id: issue.id,
-    issue_identifier: issue.identifier,
-    error_code: Exit.isFailure(exit) && Cause.hasDies(exit.cause) ? 'defect' : 'unknown_failure',
-    reason: describeWorkerExit(exit),
   }
 }
 
@@ -716,8 +497,4 @@ function describeEvidenceFailure(exit: Exit.Exit<unknown, unknown>): string {
   }
 
   return Cause.pretty(exit.cause)
-}
-
-function describeWorkerError(error: WorkerRunError): string {
-  return `${error.code}: ${error.reason}`
 }

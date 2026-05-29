@@ -744,8 +744,11 @@ export const runCodexScriptTurn = Effect.fn('runCodexScriptTurn')(function* (
 
 const makeCodexProcessSession = Effect.fn('makeCodexProcessSession')(function* (
   params: CodexRunParams,
+  options: RunCodexProcessTransportOptions = {},
 ): Effect.fn.Return<CodexProtocolSession, CodexError, ChildProcessSpawner.ChildProcessSpawner | Scope.Scope> {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const childProcessSpawner = options.childProcessSpawner === undefined
+    ? yield* ChildProcessSpawner.ChildProcessSpawner
+    : options.childProcessSpawner
   const outbound = yield* Queue.unbounded<Uint8Array>()
   const inbound = yield* Queue.unbounded<ProcessProtocolEvent>()
   const stderrTail = yield* Ref.make('')
@@ -764,7 +767,7 @@ const makeCodexProcessSession = Effect.fn('makeCodexProcessSession')(function* (
     killSignal: 'SIGTERM',
     forceKillAfter: '1 second',
   })
-  const handle = yield* spawner.spawn(command).pipe(
+  const handle = yield* childProcessSpawner.spawn(command).pipe(
     Effect.mapError(cause => new CodexError({
       code: 'codex_not_found',
       reason: 'failed to start Codex app-server command',
@@ -849,13 +852,18 @@ const makeCodexProcessSession = Effect.fn('makeCodexProcessSession')(function* (
   }
 })
 
+interface RunCodexProcessTransportOptions {
+  readonly childProcessSpawner?: ChildProcessSpawner.ChildProcessSpawner['Service']
+}
+
 const runCodexProcessTurnWithTransport = Effect.fn('runCodexProcessTurnWithTransport')(function* (
   params: CodexRunParams,
   linearTransport: LinearTransportShape,
+  options: RunCodexProcessTransportOptions = {},
 ): Effect.fn.Return<CodexRunResult, CodexError> {
   yield* validateWorkspaceCwdEffect(params)
 
-  return yield* makeCodexProcessSession(params).pipe(
+  return yield* makeCodexProcessSession(params, options).pipe(
     Effect.flatMap(session =>
       runCodexProtocolTurn(session, params).pipe(
         Effect.provideService(LinearTransport, linearTransport),
@@ -870,7 +878,15 @@ const runCodexProcessTurn = Effect.fn('runCodexProcessTurn')(function* (
 ): Effect.fn.Return<CodexRunResult, CodexError, LinearTransport> {
   const linearTransport = yield* LinearTransport
 
-  return yield* runCodexProcessTurnWithTransport(params, linearTransport)
+  return yield* runCodexProcessTurnWithTransport(params, linearTransport, {})
+})
+
+export const runCodexProcessTurnWithTransportForTests = Effect.fn('runCodexProcessTurnWithTransportForTests')(function* (
+  params: CodexRunParams,
+  linearTransport: LinearTransportShape,
+  options: RunCodexProcessTransportOptions,
+): Effect.fn.Return<CodexRunResult, CodexError> {
+  return yield* runCodexProcessTurnWithTransport(params, linearTransport, options)
 })
 
 export const CodexAppServerClientLive = Layer.succeed(CodexAppServerClient)({
